@@ -354,6 +354,10 @@ function renderOverviewStats(overview) {
       if (statusIconEl) statusIconEl.setAttribute('class', 'w-4 h-4 text-emerald-400');
     }
   }
+
+  if (overview.email_alerts_enabled !== undefined) {
+    updateEmailAlertToggleButton(overview.email_alerts_enabled);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -866,12 +870,51 @@ function showToast(title, message, type = 'info') {
   }, 4000);
 }
 
+async function toggleEmailAlerts() {
+  const baseUrl = Config.getApiUrl();
+  try {
+    const res = await fetch(`${baseUrl}/api/settings/email-toggle`, { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      updateEmailAlertToggleButton(data.email_alerts_enabled);
+      showToast(
+        'Email Alerts',
+        data.email_alerts_enabled ? '✅ Real-time email alerts are now ACTIVE.' : '🛑 Email alerts PAUSED (No emails will be sent).',
+        data.email_alerts_enabled ? 'info' : 'warning'
+      );
+      fetchDashboardData(true);
+    }
+  } catch (err) {
+    showToast('Error', err.message, 'error');
+  }
+}
+
+function updateEmailAlertToggleButton(isEnabled) {
+  state.emailAlertsEnabled = isEnabled;
+  const btn = document.getElementById('btn-toggle-email-alerts');
+  const icon = document.getElementById('icon-email-toggle');
+  const text = document.getElementById('text-email-toggle');
+  if (!btn || !icon || !text) return;
+
+  if (isEnabled) {
+    btn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 shadow-sm';
+    icon.setAttribute('data-lucide', 'bell');
+    text.textContent = 'Email Alerts: ON';
+  } else {
+    btn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20 shadow-sm';
+    icon.setAttribute('data-lucide', 'bell-off');
+    text.textContent = 'Email Alerts: OFF';
+  }
+  initLucide();
+}
+
 // Expose globals for HTML onclick attributes
 window.setChartMachine = setChartMachine;
 window.setChartMetric = setChartMetric;
 window.triggerSimTick = triggerSimTick;
 window.triggerHazard = triggerHazard;
 window.restoreNormal = restoreNormal;
+window.toggleEmailAlerts = toggleEmailAlerts;
 window.openConfigModal = openConfigModal;
 window.closeConfigModal = closeConfigModal;
 window.testConfigUrl = testConfigUrl;
@@ -879,3 +922,4 @@ window.saveConfigUrl = saveConfigUrl;
 window.openTestAlertModal = openTestAlertModal;
 window.closeTestAlertModal = closeTestAlertModal;
 window.submitTestEmail = submitTestEmail;
+

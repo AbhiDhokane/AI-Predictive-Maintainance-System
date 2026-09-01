@@ -276,10 +276,11 @@ def is_cooldown_active(machine_id: str) -> bool:
     return datetime.now() - last < timedelta(minutes=ALERT_COOLDOWN_MINUTES)
 
 
-def maybe_send_alert(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any]) -> Dict[str, Any]:
+def maybe_send_alert(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any], email_enabled: Optional[bool] = None) -> Dict[str, Any]:
     """Evaluate risk threshold and send alert email if needed."""
-    if not EMAIL_ALERTS_ENABLED:
-        return {"sent": False, "reason": "disabled", "message": "Email alerts disabled."}
+    alerts_on = email_enabled if email_enabled is not None else EMAIL_ALERTS_ENABLED
+    if not alerts_on:
+        return {"sent": False, "reason": "disabled", "message": "Email alerts are currently turned OFF by operator."}
 
     if risk_percent < ALERT_RISK_THRESHOLD:
         return {"sent": False, "reason": "below_threshold"}

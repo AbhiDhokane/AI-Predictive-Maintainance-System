@@ -46,6 +46,11 @@ from app.schemas import (
 # ---------------------------------------------------------------------------
 # In-Memory Machine State & Physical Telemetry Controllers
 # ---------------------------------------------------------------------------
+RUNTIME_SETTINGS = {
+    "email_alerts_enabled": EMAIL_ALERTS_ENABLED,
+}
+
+
 def _init_cycles_for(mid: str, idx: int) -> int:
     """Stagger initial autonomous faults across machines (20s - 90s)."""
     base = (idx + 1) * 5
@@ -353,6 +358,7 @@ def create_sensor_reading(payload: SensorReadingCreate):
             pred["status"],
             pred["risk_percent"],
             sensor_data,
+            email_enabled=RUNTIME_SETTINGS["email_alerts_enabled"],
         )
 
     ctrl = MACHINE_CONTROLLERS.get(payload.machine_id, {})
@@ -387,7 +393,7 @@ def get_system_overview():
             total_alerts_sent=stats["total_alerts_sent"],
             monitored_machines=MACHINES,
             alert_threshold=ALERT_RISK_THRESHOLD,
-            email_alerts_enabled=EMAIL_ALERTS_ENABLED,
+            email_alerts_enabled=RUNTIME_SETTINGS["email_alerts_enabled"],
             machines=latest_readings,
         )
     except Exception as e:
@@ -479,3 +485,33 @@ def normalize_machine(machine_id: str = Query(..., description="Target machine I
         "message": f"Machine {machine_id} inspected, repaired, and restarted into autonomous operation.",
         "reading": reading,
     }
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Settings & Control Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/settings", tags=["Settings"])
+def get_runtime_settings():
+    """Get current dynamic runtime configuration."""
+    return {
+        "email_alerts_enabled": RUNTIME_SETTINGS["email_alerts_enabled"],
+        "alert_threshold": ALERT_RISK_THRESHOLD,
+        "alert_cooldown_minutes": ALERT_COOLDOWN_MINUTES,
+    }
+
+
+@app.post("/api/settings/email-toggle", tags=["Settings"])
+def toggle_email_alerts(enabled: Optional[bool] = Query(None, description="Explicitly enable or disable email alerts")):
+    """Toggle automated email alerts on or off dynamically without restarting the server."""
+    if enabled is not None:
+        RUNTIME_SETTINGS["email_alerts_enabled"] = enabled
+    else:
+        RUNTIME_SETTINGS["email_alerts_enabled"] = not RUNTIME_SETTINGS["email_alerts_enabled"]
+    
+    is_on = RUNTIME_SETTINGS["email_alerts_enabled"]
+    return {
+        "email_alerts_enabled": is_on,
+        "status": "ACTIVE" if is_on else "PAUSED",
+        "message": f"Email alert notifications are now {'ENABLED (Active)' if is_on else 'DISABLED (Turned OFF)'}."
+    }
+
