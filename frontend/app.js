@@ -15,11 +15,19 @@ const state = {
 
 // Metric Configurations (units, color schemes, chart ranges)
 const METRIC_CONFIG = {
+  risk: {
+    label: 'AI Failure Risk',
+    unit: '%',
+    color: '#f43f5e',
+    bgColor: 'rgba(244, 63, 94, 0.20)',
+    normalMax: 30,
+    warningMax: 60,
+  },
   temperature: {
     label: 'Temperature',
     unit: '°C',
-    color: '#f43f5e',
-    bgColor: 'rgba(244, 63, 94, 0.15)',
+    color: '#fb7185',
+    bgColor: 'rgba(251, 113, 133, 0.15)',
     normalMax: 75,
     warningMax: 85,
   },
@@ -581,7 +589,12 @@ function renderChartData(history) {
   if (!metricCfg) return;
 
   const labels = history.map(item => formatLocalTime(item.recorded_at));
-  const data = history.map(item => Number(item[metricKey] || 0));
+  const data = history.map(item => {
+    if (metricKey === 'risk') {
+      return Number(item.risk_percent !== undefined ? item.risk_percent : (item.risk !== undefined ? item.risk : 0));
+    }
+    return Number(item[metricKey] || 0);
+  });
 
   state.chart.data.labels = labels;
   state.chart.data.datasets[0].label = `${state.activeMachine} - ${metricCfg.label} (${metricCfg.unit})`;

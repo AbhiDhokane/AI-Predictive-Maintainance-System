@@ -42,6 +42,7 @@ class HistoryPoint(BaseModel):
     vibration: float
     current: float
     rpm: int
+    risk_percent: Optional[float] = 0.0
     recorded_at: Union[datetime, str]
 
 

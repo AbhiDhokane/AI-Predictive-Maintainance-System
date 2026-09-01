@@ -64,13 +64,22 @@ def predict_risk(temperature: float, vibration: float, current: float, rpm: int)
     predicted_class = int(model.predict(features)[0])
     probabilities = model.predict_proba(features)[0]
     
-    # Class 2 corresponds to HIGH FAILURE RISK
-    risk_percent = float(probabilities[2] * 100.0) if len(probabilities) > 2 else 0.0
+    prob_high_risk = float(probabilities[2]) if len(probabilities) > 2 else 0.0
+    prob_warning = float(probabilities[1]) if len(probabilities) > 1 else 0.0
+
+    # Smooth continuous composite risk calculation:
+    # High risk probability scales to 100%, warning probability scales to ~45%
+    # with progressive physical penalty for gradual thermal & mechanical wear
+    composite_risk = prob_high_risk * 100.0 + prob_warning * 45.0
+    temp_penalty = max(0.0, (temperature - 68.0) * 0.75)
+    vib_penalty = max(0.0, (vibration - 2.0) * 4.0)
+
+    final_risk = min(100.0, composite_risk + temp_penalty + vib_penalty)
     status = STATUS_LABELS[predicted_class] if 0 <= predicted_class < len(STATUS_LABELS) else "UNKNOWN"
 
     return {
         "predicted_class": predicted_class,
         "status": status,
-        "risk_percent": round(risk_percent, 2),
+        "risk_percent": round(final_risk, 1),
         "probabilities": [round(float(p), 4) for p in probabilities],
     }

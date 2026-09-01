@@ -70,7 +70,7 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
     """
     Executes one physical simulation step for a machine.
     If tripped, keeps machine halted with cooling temperature and 0 RPM until user heals it.
-    If running, generates telemetry with realistic degradation -> failure trip.
+    If running, generates realistic smooth multi-stage physical degradation -> failure trip.
     """
     ctrl = MACHINE_CONTROLLERS.setdefault(mid, {
         "operational_state": "RUNNING",
@@ -79,14 +79,14 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
         "curr": 4.8,
         "rpm": 1650,
         "cycles": 0,
-        "cycles_to_fault": random.randint(6, 12),
+        "cycles_to_fault": random.randint(8, 14),
     })
 
     # Case 1: Machine is in Safety Shutdown / Lockout
     if ctrl["operational_state"] == "TRIPPED_STOPPED":
-        # Machine is stopped: cooldown towards ambient 32°C, 0 RPM, 0 Current
-        ctrl["temp"] = round(max(32.0, ctrl["temp"] - 1.5), 2)
-        ctrl["vib"] = round(random.uniform(0.03, 0.08), 2)
+        # Machine is stopped: cooldown towards ambient 30°C, 0 RPM, 0 Current
+        ctrl["temp"] = round(max(30.0, ctrl["temp"] - 1.5), 2)
+        ctrl["vib"] = round(random.uniform(0.02, 0.06), 2)
         ctrl["curr"] = 0.0
         ctrl["rpm"] = 0
 
@@ -104,60 +104,54 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
     ctrl["cycles"] += 1
     remaining = ctrl["cycles_to_fault"] - ctrl["cycles"]
 
-    # Case 2A: Critical Anomaly Spike -> Trigger Safety Trip!
+    # Stage 5: Critical Failure Anomaly Spike -> Trigger Automatic Safety Trip!
     if remaining <= 0:
-        ctrl["temp"] = round(random.uniform(93.5, 98.2), 2)
-        ctrl["vib"] = round(random.uniform(6.1, 7.5), 2)
-        ctrl["curr"] = round(random.uniform(10.5, 12.5), 2)
-        ctrl["rpm"] = random.randint(900, 1150)
+        ctrl["temp"] = round(random.uniform(94.5, 98.5), 2)
+        ctrl["vib"] = round(random.uniform(6.2, 7.6), 2)
+        ctrl["curr"] = round(random.uniform(10.8, 12.6), 2)
+        ctrl["rpm"] = random.randint(920, 1080)
         
         # Automatic Emergency Trip Lockout
         ctrl["operational_state"] = "TRIPPED_STOPPED"
         print(f"🚨 [SAFETY TRIP] High failure risk detected on {mid}! Machine automatically shut down.")
 
-        return create_sensor_reading(
-            SensorReadingCreate(
-                machine_id=mid,
-                temperature=ctrl["temp"],
-                vibration=ctrl["vib"],
-                current=ctrl["curr"],
-                rpm=ctrl["rpm"],
-            )
-        )
+    # Stage 4: Severe Anomaly Build-up (1 cycle before trip)
+    elif remaining == 1:
+        ctrl["temp"] = round(random.uniform(89.0, 93.5), 2)
+        ctrl["vib"] = round(random.uniform(4.9, 5.8), 2)
+        ctrl["curr"] = round(random.uniform(9.0, 10.5), 2)
+        ctrl["rpm"] = random.randint(1180, 1300)
 
-    # Case 2B: Degradation / Warning Phase (1-2 cycles before trip)
-    elif remaining <= 2:
-        ctrl["temp"] = round(random.uniform(81.0, 87.0), 2)
-        ctrl["vib"] = round(random.uniform(3.5, 4.6), 2)
-        ctrl["curr"] = round(random.uniform(7.8, 9.2), 2)
-        ctrl["rpm"] = random.randint(1280, 1420)
+    # Stage 3: Elevated Warning (2-3 cycles before trip)
+    elif remaining <= 3:
+        ctrl["temp"] = round(random.uniform(82.0, 87.5), 2)
+        ctrl["vib"] = round(random.uniform(3.6, 4.6), 2)
+        ctrl["curr"] = round(random.uniform(7.5, 8.8), 2)
+        ctrl["rpm"] = random.randint(1320, 1450)
 
-        return create_sensor_reading(
-            SensorReadingCreate(
-                machine_id=mid,
-                temperature=ctrl["temp"],
-                vibration=ctrl["vib"],
-                current=ctrl["curr"],
-                rpm=ctrl["rpm"],
-            )
-        )
+    # Stage 2: Mild Thermal & Vibration Rise (4-5 cycles before trip)
+    elif remaining <= 5:
+        ctrl["temp"] = round(random.uniform(72.0, 78.5), 2)
+        ctrl["vib"] = round(random.uniform(2.3, 3.2), 2)
+        ctrl["curr"] = round(random.uniform(5.8, 6.9), 2)
+        ctrl["rpm"] = random.randint(1480, 1580)
 
-    # Case 2C: Healthy Nominal Operation
+    # Stage 1: Healthy Baseline with subtle physical noise
     else:
-        ctrl["temp"] = round(max(54.0, min(73.0, ctrl["temp"] + random.uniform(-0.6, 0.6))), 2)
-        ctrl["vib"] = round(max(0.9, min(2.4, ctrl["vib"] + random.uniform(-0.1, 0.1))), 2)
-        ctrl["curr"] = round(max(4.0, min(6.2, ctrl["curr"] + random.uniform(-0.12, 0.12))), 2)
-        ctrl["rpm"] = int(max(1500, min(1750, ctrl["rpm"] + random.randint(-15, 15))))
+        ctrl["temp"] = round(max(56.0, min(68.0, ctrl["temp"] + random.uniform(-0.6, 0.6))), 2)
+        ctrl["vib"] = round(max(1.0, min(1.8, ctrl["vib"] + random.uniform(-0.08, 0.08))), 2)
+        ctrl["curr"] = round(max(4.2, min(5.4, ctrl["curr"] + random.uniform(-0.1, 0.1))), 2)
+        ctrl["rpm"] = int(max(1580, min(1740, ctrl["rpm"] + random.randint(-15, 15))))
 
-        return create_sensor_reading(
-            SensorReadingCreate(
-                machine_id=mid,
-                temperature=ctrl["temp"],
-                vibration=ctrl["vib"],
-                current=ctrl["curr"],
-                rpm=ctrl["rpm"],
-            )
+    return create_sensor_reading(
+        SensorReadingCreate(
+            machine_id=mid,
+            temperature=ctrl["temp"],
+            vibration=ctrl["vib"],
+            current=ctrl["curr"],
+            rpm=ctrl["rpm"],
         )
+    )
 
 
 def generate_autonomous_cycle():
@@ -295,16 +289,20 @@ def get_history(
     """Retrieve historical telemetry for a machine in chronological order."""
     try:
         rows = db_history(machine_id, limit)
-        return [
-            HistoryPoint(
-                temperature=r["temperature"],
-                vibration=r["vibration"],
-                current=r["current"],
-                rpm=r["rpm"],
-                recorded_at=r["recorded_at"],
+        history_points = []
+        for r in rows:
+            p = predict_risk(r["temperature"], r["vibration"], r["current"], r["rpm"])
+            history_points.append(
+                HistoryPoint(
+                    temperature=r["temperature"],
+                    vibration=r["vibration"],
+                    current=r["current"],
+                    rpm=r["rpm"],
+                    risk_percent=p["risk_percent"],
+                    recorded_at=r["recorded_at"],
+                )
             )
-            for r in rows
-        ]
+        return history_points
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
