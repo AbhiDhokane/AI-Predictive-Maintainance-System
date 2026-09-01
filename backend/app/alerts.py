@@ -134,28 +134,55 @@ def _send_via_resend(api_key: str, recipients: List[str], subject: str, html: st
     """Dispatch email using Resend HTTPS API (Port 443 - works on Render Free Tier)."""
     cfg = EMAIL_CONFIG
     from_addr = "AI Predictive Maintenance <onboarding@resend.dev>"
-    if cfg.get("email_from") and "@gmail.com" not in cfg.get("email_from", ""):
+    if cfg.get("email_from") and "@gmail.com" not in cfg.get("email_from", "") and "@" in cfg.get("email_from", ""):
         from_addr = cfg["email_from"]
 
-    payload = {
-        "from": from_addr,
-        "to": recipients,
-        "subject": subject,
-        "html": html,
-        "text": text,
-    }
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "AIPredictiveMaintenance/2.0",
-        },
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+    def _post_resend(to_list):
+        payload = {
+            "from": from_addr,
+            "to": to_list,
+            "subject": subject,
+            "html": html,
+            "text": text,
+        }
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "AIPredictiveMaintenance/2.0",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        return _post_resend(recipients)
+    except urllib.error.HTTPError as e:
+        err_raw = e.read().decode("utf-8")
+        try:
+            err_json = json.loads(err_raw)
+            err_msg = err_json.get("message", err_raw)
+        except Exception:
+            err_msg = err_raw
+
+        # If sandbox restriction on multiple recipients or unverified address, attempt each recipient individually
+        if e.code in (403, 422) and len(recipients) > 1:
+            delivered = []
+            for r in recipients:
+                try:
+                    _post_resend([r])
+                    delivered.append(r)
+                except Exception:
+                    pass
+            if delivered:
+                return {"sent": True, "delivered_to": delivered, "note": f"Delivered to verified sandbox recipient(s): {', '.join(delivered)}"}
+
+        raise RuntimeError(f"Resend API ({e.code}): {err_msg}")
+    except Exception as e:
+        raise RuntimeError(f"Resend Dispatch Error: {str(e)}")
 
 
 def _send_via_brevo(api_key: str, recipients: List[str], subject: str, html: str, text: str):
