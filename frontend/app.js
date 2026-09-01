@@ -295,15 +295,15 @@ function renderOverviewStats(overview) {
     if (hasCritical) {
       fleetStatusEl.textContent = 'Critical Risk';
       fleetStatusEl.className = 'text-sm font-bold text-rose-400 mt-1';
-      if (statusIconEl) statusIconEl.className = 'w-4 h-4 text-rose-400';
+      if (statusIconEl) statusIconEl.setAttribute('class', 'w-4 h-4 text-rose-400');
     } else if (hasWarning) {
       fleetStatusEl.textContent = 'Attention Needed';
       fleetStatusEl.className = 'text-sm font-bold text-amber-400 mt-1';
-      if (statusIconEl) statusIconEl.className = 'w-4 h-4 text-amber-400';
+      if (statusIconEl) statusIconEl.setAttribute('class', 'w-4 h-4 text-amber-400');
     } else {
       fleetStatusEl.textContent = 'Nominal (Healthy)';
       fleetStatusEl.className = 'text-sm font-bold text-emerald-400 mt-1';
-      if (statusIconEl) statusIconEl.className = 'w-4 h-4 text-emerald-400';
+      if (statusIconEl) statusIconEl.setAttribute('class', 'w-4 h-4 text-emerald-400');
     }
   }
 }
