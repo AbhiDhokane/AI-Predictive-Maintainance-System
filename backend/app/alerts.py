@@ -1,13 +1,15 @@
 """
 Email Alert Service for AI Predictive Maintenance System.
 Handles SMTP notifications with HTML formatting, cooldown enforcement, and database logging.
+Forces IPv4 socket resolution to prevent '[Errno 101] Network is unreachable' on cloud hosts.
 """
 import smtplib
+import socket
 import ssl
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from app.config import (
     EMAIL_CONFIG,
@@ -18,10 +20,37 @@ from app.config import (
 from app.database import last_alert_time, log_alert
 
 
-def _build_email(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any]) -> MIMEMultipart:
+class IPv4SMTP(smtplib.SMTP):
+    """SMTP client forcing IPv4 to prevent unreachable network errors on cloud containers."""
+    def _get_socket(self, host, port, timeout):
+        try:
+            res = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            target = res[0][4]
+        except Exception:
+            target = (host, port)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(target)
+        return sock
+
+
+class IPv4SMTP_SSL(smtplib.SMTP_SSL):
+    """SMTP SSL client forcing IPv4 socket resolution."""
+    def _get_socket(self, host, port, timeout):
+        try:
+            res = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            target = res[0][4]
+        except Exception:
+            target = (host, port)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(target)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
+
+
+def _build_email(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any], recipients: List[str]) -> MIMEMultipart:
     cfg = EMAIL_CONFIG
     subject = f"🚨 [CRITICAL ALERT] {machine_id} - {status} ({risk_percent:.1f}% Failure Risk)"
-
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Plain text fallback
@@ -56,10 +85,6 @@ Schedule immediate mechanical and thermal inspection for Machine {machine_id}.
     .header h1 {{ margin: 0; font-size: 22px; font-weight: 700; }}
     .badge {{ display: inline-block; background-color: #ffffff; color: #be123c; font-weight: 800; font-size: 13px; padding: 4px 12px; border-radius: 9999px; margin-top: 8px; }}
     .content {{ padding: 24px; }}
-    .metric-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0; }}
-    .metric-box {{ background-color: #0f172a; padding: 14px; border-radius: 8px; border: 1px solid #334155; }}
-    .metric-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }}
-    .metric-value {{ font-size: 18px; font-weight: bold; color: #38bdf8; margin-top: 4px; }}
     .risk-banner {{ background-color: rgba(225, 29, 72, 0.15); border: 1px solid #e11d48; padding: 16px; border-radius: 8px; margin-bottom: 20px; }}
     .footer {{ padding: 16px 24px; background-color: #0f172a; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #334155; }}
   </style>
@@ -105,8 +130,8 @@ Schedule immediate mechanical and thermal inspection for Machine {machine_id}.
     """
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = cfg["email_from"]
-    msg["To"] = ", ".join(cfg["recipients"])
+    msg["From"] = cfg["email_from"] or cfg["smtp_user"]
+    msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
 
     msg.attach(MIMEText(plain_text, "plain"))
@@ -114,21 +139,45 @@ Schedule immediate mechanical and thermal inspection for Machine {machine_id}.
     return msg
 
 
-def _send_smtp(msg: MIMEMultipart):
-    """Send email over SMTP with STARTTLS or SSL."""
+def _send_smtp_dispatch(msg: MIMEMultipart, recipients: List[str]):
+    """
+    Dispatches email via IPv4 SMTP with dual-port fallback (Port 587 STARTTLS <-> Port 465 SSL)
+    to guarantee delivery across cloud firewall and networking constraints.
+    """
     cfg = EMAIL_CONFIG
     context = ssl.create_default_context()
+    last_err = None
 
-    port = cfg["smtp_port"]
-    if port == 465:
-        with smtplib.SMTP_SSL(cfg["smtp_host"], port, context=context, timeout=15) as server:
-            server.login(cfg["smtp_user"], cfg["smtp_password"])
-            server.sendmail(cfg["email_from"], cfg["recipients"], msg.as_string())
-    else:
-        with smtplib.SMTP(cfg["smtp_host"], port, timeout=15) as server:
-            server.starttls(context=context)
-            server.login(cfg["smtp_user"], cfg["smtp_password"])
-            server.sendmail(cfg["email_from"], cfg["recipients"], msg.as_string())
+    # Primary attempt with configured port
+    primary_port = cfg.get("smtp_port", 587)
+    ports_to_try = [primary_port]
+    # Add alternative port fallback (465 if 587, or 587 if 465)
+    if primary_port == 587:
+        ports_to_try.append(465)
+    elif primary_port == 465:
+        ports_to_try.append(587)
+
+    for port in ports_to_try:
+        try:
+            if port == 465:
+                with IPv4SMTP_SSL(cfg["smtp_host"], port, context=context, timeout=12) as server:
+                    server.login(cfg["smtp_user"], cfg["smtp_password"])
+                    server.sendmail(cfg["email_from"] or cfg["smtp_user"], recipients, msg.as_string())
+                    return True
+            else:
+                with IPv4SMTP(cfg["smtp_host"], port, timeout=12) as server:
+                    server.ehlo()
+                    server.starttls(context=context)
+                    server.ehlo()
+                    server.login(cfg["smtp_user"], cfg["smtp_password"])
+                    server.sendmail(cfg["email_from"] or cfg["smtp_user"], recipients, msg.as_string())
+                    return True
+        except Exception as e:
+            last_err = e
+            continue
+
+    if last_err:
+        raise last_err
 
 
 def is_cooldown_active(machine_id: str) -> bool:
@@ -156,19 +205,20 @@ def maybe_send_alert(machine_id: str, status: str, risk_percent: float, sensor: 
         return {"sent": False, "reason": "cooldown", "message": f"Alert cooldown active for {machine_id} (last alert sent within {ALERT_COOLDOWN_MINUTES} mins)."}
 
     cfg = EMAIL_CONFIG
-    if not cfg["smtp_user"] or not cfg["smtp_password"] or not cfg["recipients"]:
+    recipients = cfg.get("recipients", [])
+    if not cfg.get("smtp_user") or not cfg.get("smtp_password") or not recipients:
         msg = "Missing SMTP credentials or recipients in .env configuration."
-        log_alert(machine_id, risk_percent, status, cfg["recipients"], "failed", msg)
+        log_alert(machine_id, risk_percent, status, recipients, "failed", msg)
         return {"sent": False, "reason": "not_configured", "error": msg}
 
-    msg = _build_email(machine_id, status, risk_percent, sensor)
+    msg = _build_email(machine_id, status, risk_percent, sensor, recipients)
     try:
-        _send_smtp(msg)
-        log_alert(machine_id, risk_percent, status, cfg["recipients"], "sent")
-        return {"sent": True, "reason": "ok", "message": f"Alert successfully sent to {', '.join(cfg['recipients'])}"}
+        _send_smtp_dispatch(msg, recipients)
+        log_alert(machine_id, risk_percent, status, recipients, "sent")
+        return {"sent": True, "reason": "ok", "message": f"Alert successfully sent to {', '.join(recipients)}"}
     except Exception as e:
         error_msg = str(e)
-        log_alert(machine_id, risk_percent, status, cfg["recipients"], "failed", error_msg)
+        log_alert(machine_id, risk_percent, status, recipients, "failed", error_msg)
         return {"sent": False, "reason": "error", "error": error_msg}
 
 
@@ -176,30 +226,18 @@ def send_test_email(recipient: Optional[str] = None) -> Dict[str, Any]:
     """Trigger a manual test email to verify SMTP delivery."""
     fake_sensor = {"temperature": 94.2, "vibration": 6.1, "current": 10.5, "rpm": 1020}
     cfg = EMAIL_CONFIG
-    recipients = [recipient] if recipient else cfg["recipients"]
+    recipients = [recipient] if recipient else cfg.get("recipients", [])
 
-    if not cfg["smtp_user"] or not cfg["smtp_password"] or not recipients:
+    if not cfg.get("smtp_user") or not cfg.get("smtp_password") or not recipients:
         return {"sent": False, "reason": "not_configured", "error": "SMTP credentials or recipients not set."}
 
-    msg = _build_email("M01-TEST", "HIGH FAILURE RISK (TEST)", 92.5, fake_sensor)
-    if recipient:
-        msg["To"] = recipient
+    msg = _build_email("M01-TEST", "HIGH FAILURE RISK (TEST)", 92.5, fake_sensor, recipients)
 
     try:
-        context = ssl.create_default_context()
-        port = cfg["smtp_port"]
-        if port == 465:
-            with smtplib.SMTP_SSL(cfg["smtp_host"], port, context=context, timeout=15) as server:
-                server.login(cfg["smtp_user"], cfg["smtp_password"])
-                server.sendmail(cfg["email_from"], recipients, msg.as_string())
-        else:
-            with smtplib.SMTP(cfg["smtp_host"], port, timeout=15) as server:
-                server.starttls(context=context)
-                server.login(cfg["smtp_user"], cfg["smtp_password"])
-                server.sendmail(cfg["email_from"], recipients, msg.as_string())
-
+        _send_smtp_dispatch(msg, recipients)
         log_alert("M01-TEST", 92.5, "HIGH FAILURE RISK (TEST)", recipients, "sent")
         return {"sent": True, "reason": "ok", "message": f"Test alert sent to {', '.join(recipients)}"}
     except Exception as e:
-        log_alert("M01-TEST", 92.5, "HIGH FAILURE RISK (TEST)", recipients, "failed", str(e))
-        return {"sent": False, "reason": "error", "error": str(e)}
+        error_msg = str(e)
+        log_alert("M01-TEST", 92.5, "HIGH FAILURE RISK (TEST)", recipients, "failed", error_msg)
+        return {"sent": False, "reason": "error", "error": error_msg}
