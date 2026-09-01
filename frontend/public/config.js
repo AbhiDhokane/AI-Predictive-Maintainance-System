@@ -7,14 +7,15 @@ const Config = {
     if (saved && saved.trim()) {
       return saved.trim().replace(/\/+$/, '');
     }
-    if (window.VITE_API_URL) {
+    if (window.VITE_API_URL && window.VITE_API_URL !== 'undefined') {
       return window.VITE_API_URL.replace(/\/+$/, '');
     }
-    // Default fallback
+    // Default fallback for local dev
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://127.0.0.1:8000';
     }
-    return 'https://ai-predictive-maintenance-api.onrender.com';
+    // Default cloud placeholder
+    return 'https://ai-predictive-maintainance-system.onrender.com';
   },
 
   setApiUrl(url) {
@@ -29,10 +30,11 @@ const Config = {
     const baseUrl = customUrl || this.getApiUrl();
     const start = performance.now();
     try {
-      const response = await fetch(`${baseUrl}/health`, {
+      // Use /api/status to avoid adblocker filters blocking /health
+      const response = await fetch(`${baseUrl}/api/status`, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(6000)
       });
       const duration = Math.round(performance.now() - start);
       if (response.ok) {
@@ -41,11 +43,24 @@ const Config = {
       }
       return { ok: false, error: `HTTP ${response.status}: ${response.statusText}`, url: baseUrl };
     } catch (err) {
+      // Try fallback /health endpoint
+      try {
+        const res2 = await fetch(`${baseUrl}/health`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(4000)
+        });
+        if (res2.ok) {
+          const data = await res2.json();
+          return { ok: true, latency: Math.round(performance.now() - start), data, url: baseUrl };
+        }
+      } catch (_) {}
+
       // If localhost failed, try 127.0.0.1 fallback
       if (!customUrl && baseUrl.includes('localhost:8000')) {
         const fallbackUrl = baseUrl.replace('localhost:8000', '127.0.0.1:8000');
         try {
-          const res = await fetch(`${fallbackUrl}/health`, {
+          const res = await fetch(`${fallbackUrl}/api/status`, {
             method: 'GET',
             headers: { 'Accept': 'application/json' },
             signal: AbortSignal.timeout(3000)
@@ -57,7 +72,7 @@ const Config = {
           }
         } catch (_) {}
       }
-      return { ok: false, error: err.message || 'Backend server is not running on port 8000', url: baseUrl };
+      return { ok: false, error: err.message || 'Could not connect to backend server', url: baseUrl };
     }
   }
 };

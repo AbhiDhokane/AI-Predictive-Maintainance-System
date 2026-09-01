@@ -82,6 +82,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 @app.get("/", tags=["Health"])
 @app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
+@app.get("/api/status", tags=["Health"])
 def health_check():
     """Health check endpoint for Render service monitoring."""
     return {
