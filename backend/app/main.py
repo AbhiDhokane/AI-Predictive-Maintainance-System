@@ -46,6 +46,12 @@ from app.schemas import (
 # ---------------------------------------------------------------------------
 # In-Memory Machine State & Physical Telemetry Controllers
 # ---------------------------------------------------------------------------
+def _init_cycles_for(mid: str, idx: int) -> int:
+    """Stagger initial autonomous faults across machines (20s - 90s)."""
+    base = (idx + 1) * 5
+    return random.randint(base, base + 4)
+
+
 MACHINE_CONTROLLERS: Dict[str, Dict[str, Any]] = {
     m: {
         "operational_state": "RUNNING",  # "RUNNING" or "TRIPPED_STOPPED"
@@ -54,17 +60,17 @@ MACHINE_CONTROLLERS: Dict[str, Dict[str, Any]] = {
         "curr": round(random.uniform(4.5, 5.5), 2),
         "rpm": random.randint(1550, 1720),
         "cycles": 0,
-        "cycles_to_fault": random.randint(25, 50),  # Autonomous fault trigger
+        "cycles_to_fault": _init_cycles_for(m, i),
     }
-    for m in MACHINES
+    for i, m in enumerate(MACHINES)
 }
 
 
 def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
     """
     Executes one physical simulation step for a machine.
-    If tripped, keeps machine halted with cooling temperature and 0 RPM.
-    If running, generates smooth telemetry with occasional degradation leading to trip.
+    If tripped, keeps machine halted with cooling temperature and 0 RPM until user heals it.
+    If running, generates telemetry with realistic degradation -> failure trip.
     """
     ctrl = MACHINE_CONTROLLERS.setdefault(mid, {
         "operational_state": "RUNNING",
@@ -73,18 +79,18 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
         "curr": 4.8,
         "rpm": 1650,
         "cycles": 0,
-        "cycles_to_fault": random.randint(25, 50),
+        "cycles_to_fault": random.randint(6, 12),
     })
 
     # Case 1: Machine is in Safety Shutdown / Lockout
     if ctrl["operational_state"] == "TRIPPED_STOPPED":
         # Machine is stopped: cooldown towards ambient 32°C, 0 RPM, 0 Current
-        ctrl["temp"] = round(max(32.0, ctrl["temp"] - 1.2), 2)
-        ctrl["vib"] = round(random.uniform(0.04, 0.10), 2)
+        ctrl["temp"] = round(max(32.0, ctrl["temp"] - 1.5), 2)
+        ctrl["vib"] = round(random.uniform(0.03, 0.08), 2)
         ctrl["curr"] = 0.0
         ctrl["rpm"] = 0
 
-        reading = create_sensor_reading(
+        return create_sensor_reading(
             SensorReadingCreate(
                 machine_id=mid,
                 temperature=ctrl["temp"],
@@ -93,24 +99,23 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
                 rpm=ctrl["rpm"],
             )
         )
-        return reading
 
     # Case 2: Machine is Active & Running
     ctrl["cycles"] += 1
+    remaining = ctrl["cycles_to_fault"] - ctrl["cycles"]
 
-    # Check if continuous wear reaches critical hazard threshold
-    if ctrl["cycles"] >= ctrl["cycles_to_fault"]:
-        # Anomaly build-up spike
-        ctrl["temp"] = round(random.uniform(93.0, 98.5), 2)
-        ctrl["vib"] = round(random.uniform(5.8, 7.4), 2)
-        ctrl["curr"] = round(random.uniform(10.2, 12.4), 2)
+    # Case 2A: Critical Anomaly Spike -> Trigger Safety Trip!
+    if remaining <= 0:
+        ctrl["temp"] = round(random.uniform(93.5, 98.2), 2)
+        ctrl["vib"] = round(random.uniform(6.1, 7.5), 2)
+        ctrl["curr"] = round(random.uniform(10.5, 12.5), 2)
         ctrl["rpm"] = random.randint(900, 1150)
-
-        # Safety Action: Trip the machine automatically!
+        
+        # Automatic Emergency Trip Lockout
         ctrl["operational_state"] = "TRIPPED_STOPPED"
         print(f"🚨 [SAFETY TRIP] High failure risk detected on {mid}! Machine automatically shut down.")
 
-        reading = create_sensor_reading(
+        return create_sensor_reading(
             SensorReadingCreate(
                 machine_id=mid,
                 temperature=ctrl["temp"],
@@ -119,24 +124,40 @@ def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
                 rpm=ctrl["rpm"],
             )
         )
-        return reading
 
-    # Normal smooth physical progression
-    ctrl["temp"] = round(max(52.0, min(75.0, ctrl["temp"] + random.uniform(-0.6, 0.6))), 2)
-    ctrl["vib"] = round(max(0.8, min(2.5, ctrl["vib"] + random.uniform(-0.12, 0.12))), 2)
-    ctrl["curr"] = round(max(3.8, min(6.4, ctrl["curr"] + random.uniform(-0.15, 0.15))), 2)
-    ctrl["rpm"] = int(max(1450, min(1750, ctrl["rpm"] + random.randint(-15, 15))))
+    # Case 2B: Degradation / Warning Phase (1-2 cycles before trip)
+    elif remaining <= 2:
+        ctrl["temp"] = round(random.uniform(81.0, 87.0), 2)
+        ctrl["vib"] = round(random.uniform(3.5, 4.6), 2)
+        ctrl["curr"] = round(random.uniform(7.8, 9.2), 2)
+        ctrl["rpm"] = random.randint(1280, 1420)
 
-    reading = create_sensor_reading(
-        SensorReadingCreate(
-            machine_id=mid,
-            temperature=ctrl["temp"],
-            vibration=ctrl["vib"],
-            current=ctrl["curr"],
-            rpm=ctrl["rpm"],
+        return create_sensor_reading(
+            SensorReadingCreate(
+                machine_id=mid,
+                temperature=ctrl["temp"],
+                vibration=ctrl["vib"],
+                current=ctrl["curr"],
+                rpm=ctrl["rpm"],
+            )
         )
-    )
-    return reading
+
+    # Case 2C: Healthy Nominal Operation
+    else:
+        ctrl["temp"] = round(max(54.0, min(73.0, ctrl["temp"] + random.uniform(-0.6, 0.6))), 2)
+        ctrl["vib"] = round(max(0.9, min(2.4, ctrl["vib"] + random.uniform(-0.1, 0.1))), 2)
+        ctrl["curr"] = round(max(4.0, min(6.2, ctrl["curr"] + random.uniform(-0.12, 0.12))), 2)
+        ctrl["rpm"] = int(max(1500, min(1750, ctrl["rpm"] + random.randint(-15, 15))))
+
+        return create_sensor_reading(
+            SensorReadingCreate(
+                machine_id=mid,
+                temperature=ctrl["temp"],
+                vibration=ctrl["vib"],
+                current=ctrl["curr"],
+                rpm=ctrl["rpm"],
+            )
+        )
 
 
 def generate_autonomous_cycle():
@@ -441,7 +462,7 @@ def normalize_machine(machine_id: str = Query(..., description="Target machine I
     ctrl = MACHINE_CONTROLLERS.setdefault(machine_id, {})
     ctrl["operational_state"] = "RUNNING"
     ctrl["cycles"] = 0
-    ctrl["cycles_to_fault"] = random.randint(30, 60)
+    ctrl["cycles_to_fault"] = random.randint(6, 12)
     ctrl["temp"] = round(random.uniform(58.0, 64.0), 2)
     ctrl["vib"] = round(random.uniform(1.1, 1.6), 2)
     ctrl["curr"] = round(random.uniform(4.2, 5.2), 2)
