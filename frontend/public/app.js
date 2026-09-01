@@ -60,8 +60,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initLucide() {
-  if (window.lucide) {
-    window.lucide.createIcons();
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    try {
+      window.lucide.createIcons();
+    } catch (_) {}
   }
 }
 
@@ -96,6 +98,8 @@ function initEventListeners() {
 function updateRefreshToggleButton() {
   const btn = document.getElementById('btn-toggle-refresh');
   const icon = document.getElementById('icon-refresh-toggle');
+  if (!btn || !icon) return;
+
   if (state.autoRefresh) {
     btn.classList.add('text-teal-400');
     btn.classList.remove('text-slate-500');
@@ -139,9 +143,7 @@ function stopRefreshTimer() {
 async function checkApiAndFetch() {
   const conn = await Config.testConnection();
   updateApiStatusBadge(conn);
-  if (conn.ok) {
-    await fetchDashboardData();
-  }
+  await fetchDashboardData();
 }
 
 function updateApiStatusBadge(conn) {
@@ -149,13 +151,15 @@ function updateApiStatusBadge(conn) {
   const text = document.getElementById('api-status-text');
   const latency = document.getElementById('api-latency');
 
+  if (!dot || !text || !latency) return;
+
   if (conn.ok) {
     dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
     text.textContent = 'API Connected';
     text.className = 'text-emerald-400 font-medium';
-    latency.textContent = `${conn.latency}ms`;
+    latency.textContent = conn.latency ? `${conn.latency}ms` : 'Online';
   } else {
-    dot.className = 'w-2 h-2 rounded-full bg-rose-500 animate-ping';
+    dot.className = 'w-2 h-2 rounded-full bg-rose-500 animate-pulse';
     text.textContent = 'API Disconnected';
     text.className = 'text-rose-400 font-medium';
     latency.textContent = 'Offline';
@@ -164,39 +168,72 @@ function updateApiStatusBadge(conn) {
 
 async function fetchDashboardData(silent = false) {
   const baseUrl = Config.getApiUrl();
+  let hasAnySuccess = false;
+  const start = performance.now();
 
   try {
-    const start = performance.now();
-    
-    // Fetch Overview, Latest Telemetry, and Recent Alerts in parallel
-    const [overviewRes, latestRes, historyRes, alertsRes] = await Promise.all([
-      fetch(`${baseUrl}/api/overview`).catch(() => null),
-      fetch(`${baseUrl}/api/readings/latest`).catch(() => null),
-      fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`).catch(() => null),
-      fetch(`${baseUrl}/api/alerts/recent?limit=10`).catch(() => null),
-    ]);
+    // 1. Fetch Overview (contains high level KPIs + machine statuses)
+    try {
+      const overviewRes = await fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(8000) });
+      if (overviewRes.ok) {
+        const overview = await overviewRes.json();
+        hasAnySuccess = true;
+        renderOverviewStats(overview);
+        if (overview.machines && overview.machines.length > 0) {
+          renderMachineCards(overview.machines);
+        }
+      }
+    } catch (e) {
+      console.warn('Overview fetch warning:', e);
+    }
+
+    // 2. Fetch Latest Readings (if not already populated or for freshest readings)
+    try {
+      const latestRes = await fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(8000) });
+      if (latestRes.ok) {
+        const machines = await latestRes.json();
+        hasAnySuccess = true;
+        if (machines && machines.length > 0) {
+          renderMachineCards(machines);
+        }
+      }
+    } catch (e) {
+      console.warn('Latest readings fetch warning:', e);
+    }
+
+    // 3. Fetch Historical Data for Active Machine
+    try {
+      const historyRes = await fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(8000) });
+      if (historyRes.ok) {
+        const history = await historyRes.json();
+        hasAnySuccess = true;
+        renderChartData(history);
+      }
+    } catch (e) {
+      console.warn('History fetch warning:', e);
+    }
+
+    // 4. Fetch Recent Alert Audit Log
+    try {
+      const alertsRes = await fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(8000) });
+      if (alertsRes.ok) {
+        const alerts = await alertsRes.json();
+        hasAnySuccess = true;
+        renderAlertsTable(alerts);
+      }
+    } catch (e) {
+      console.warn('Alerts fetch warning:', e);
+    }
 
     const duration = Math.round(performance.now() - start);
 
-    if (overviewRes && overviewRes.ok) {
+    if (hasAnySuccess) {
       updateApiStatusBadge({ ok: true, latency: duration });
-      const overview = await overviewRes.json();
-      renderOverviewStats(overview);
-    }
-
-    if (latestRes && latestRes.ok) {
-      const machines = await latestRes.json();
-      renderMachineCards(machines);
-    }
-
-    if (historyRes && historyRes.ok) {
-      const history = await historyRes.json();
-      renderChartData(history);
-    }
-
-    if (alertsRes && alertsRes.ok) {
-      const alerts = await alertsRes.json();
-      renderAlertsTable(alerts);
+    } else {
+      updateApiStatusBadge({ ok: false });
+      if (!silent) {
+        showToast('Connection Error', `Failed to connect to backend at ${baseUrl}`, 'error');
+      }
     }
 
     initLucide();
@@ -212,6 +249,8 @@ async function fetchDashboardData(silent = false) {
 // Render Overview Stats KPI
 // ---------------------------------------------------------------------------
 function renderOverviewStats(overview) {
+  if (!overview) return;
+
   const unitsEl = document.getElementById('stat-units');
   const maxRiskEl = document.getElementById('stat-max-risk');
   const maxRiskMachineEl = document.getElementById('stat-max-risk-machine');
@@ -221,10 +260,10 @@ function renderOverviewStats(overview) {
   const statusIconEl = document.getElementById('stat-status-icon');
   const alertConfigEl = document.getElementById('stat-alert-config');
 
-  if (unitsEl) unitsEl.textContent = overview.monitored_machines?.length || 0;
-  if (totalReadingsEl) totalReadingsEl.textContent = Number(overview.total_readings).toLocaleString();
-  if (totalAlertsEl) totalAlertsEl.textContent = Number(overview.total_alerts_sent).toLocaleString();
-  if (alertConfigEl) alertConfigEl.textContent = `Alert Risk Threshold: ${overview.alert_threshold}%`;
+  if (unitsEl) unitsEl.textContent = overview.monitored_machines?.length || (overview.machines?.length || 0);
+  if (totalReadingsEl) totalReadingsEl.textContent = Number(overview.total_readings || 0).toLocaleString();
+  if (totalAlertsEl) totalAlertsEl.textContent = Number(overview.total_alerts_sent || 0).toLocaleString();
+  if (alertConfigEl) alertConfigEl.textContent = `Threshold: ${overview.alert_threshold || 60}%`;
 
   let maxRisk = 0;
   let maxRiskMid = 'None';
@@ -233,12 +272,13 @@ function renderOverviewStats(overview) {
 
   if (overview.machines && overview.machines.length > 0) {
     overview.machines.forEach(m => {
-      if (m.risk_percent > maxRisk) {
-        maxRisk = m.risk_percent;
+      const risk = Number(m.risk_percent || 0);
+      if (risk > maxRisk) {
+        maxRisk = risk;
         maxRiskMid = m.machine_id;
       }
       if (m.status === 'WARNING') hasWarning = true;
-      if (m.status === 'HIGH FAILURE RISK') hasCritical = true;
+      if (m.status === 'HIGH FAILURE RISK' || risk >= 60) hasCritical = true;
     });
   }
 
@@ -280,21 +320,28 @@ function renderMachineCards(machines) {
       <div class="col-span-3 glass-panel p-8 rounded-2xl text-center text-slate-400">
         <i data-lucide="alert-circle" class="w-8 h-8 mx-auto mb-2 text-slate-500"></i>
         <p class="font-medium">No sensor telemetry detected yet.</p>
-        <p class="text-xs text-slate-500 mt-1">Click "Simulate Step" above to generate initial machine readings.</p>
+        <p class="text-xs text-slate-500 mt-1">Click "Simulate Step" above to generate machine readings.</p>
       </div>
     `;
+    initLucide();
     return;
   }
 
   container.innerHTML = machines.map(m => {
-    const isCritical = m.status === 'HIGH FAILURE RISK' || m.risk_percent >= 60;
+    const risk = Number(m.risk_percent || 0);
+    const isCritical = m.status === 'HIGH FAILURE RISK' || risk >= 60;
     const isWarning = m.status === 'WARNING';
     
     // Theme Colors
     const statusBg = isCritical ? 'bg-rose-500/15 border-rose-500/30 text-rose-400' : (isWarning ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400');
     const glowClass = isCritical ? 'glow-rose border-rose-500/40' : (isWarning ? 'glow-amber border-amber-500/30' : 'border-slate-800');
     const riskMeterColor = isCritical ? '#f43f5e' : (isWarning ? '#f59e0b' : '#10b981');
-    const timeFormatted = new Date(m.recorded_at).toLocaleTimeString();
+    const timeFormatted = m.recorded_at ? new Date(m.recorded_at).toLocaleTimeString() : 'Just now';
+
+    const temp = Number(m.temperature || 0).toFixed(1);
+    const vib = Number(m.vibration || 0).toFixed(2);
+    const cur = Number(m.current || 0).toFixed(2);
+    const rpm = Math.round(Number(m.rpm || 0));
 
     return `
       <div class="glass-panel glass-panel-hover p-6 rounded-2xl ${glowClass} relative overflow-hidden transition-all">
@@ -317,7 +364,7 @@ function renderMachineCards(machines) {
           <!-- Status Badge -->
           <div class="px-2.5 py-1 rounded-full text-[11px] font-bold border uppercase tracking-wider flex items-center gap-1.5 ${statusBg}">
             <span class="w-1.5 h-1.5 rounded-full ${isCritical ? 'bg-rose-400 animate-ping' : (isWarning ? 'bg-amber-400' : 'bg-emerald-400')}"></span>
-            <span>${m.status}</span>
+            <span>${m.status || 'NORMAL'}</span>
           </div>
         </div>
 
@@ -325,10 +372,10 @@ function renderMachineCards(machines) {
         <div class="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 mb-4">
           <div class="flex items-center justify-between mb-1.5">
             <span class="text-xs font-semibold text-slate-300">AI Failure Risk</span>
-            <span class="text-sm font-bold telemetry-val" style="color: ${riskMeterColor};">${m.risk_percent.toFixed(1)}%</span>
+            <span class="text-sm font-bold telemetry-val" style="color: ${riskMeterColor};">${risk.toFixed(1)}%</span>
           </div>
           <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-            <div class="h-full rounded-full transition-all duration-700" style="width: ${Math.min(m.risk_percent, 100)}%; background-color: ${riskMeterColor};"></div>
+            <div class="h-full rounded-full transition-all duration-700" style="width: ${Math.min(risk, 100)}%; background-color: ${riskMeterColor};"></div>
           </div>
         </div>
 
@@ -340,7 +387,7 @@ function renderMachineCards(machines) {
               <i data-lucide="thermometer" class="w-3.5 h-3.5 text-rose-400"></i>
               <span>Temperature</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${m.temperature.toFixed(1)} <span class="text-[10px] text-slate-400">°C</span></div>
+            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${temp} <span class="text-[10px] text-slate-400">°C</span></div>
           </div>
 
           <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
@@ -348,7 +395,7 @@ function renderMachineCards(machines) {
               <i data-lucide="activity" class="w-3.5 h-3.5 text-amber-400"></i>
               <span>Vibration</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${m.vibration.toFixed(2)} <span class="text-[10px] text-slate-400">mm/s</span></div>
+            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${vib} <span class="text-[10px] text-slate-400">mm/s</span></div>
           </div>
 
           <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
@@ -356,7 +403,7 @@ function renderMachineCards(machines) {
               <i data-lucide="zap" class="w-3.5 h-3.5 text-cyan-400"></i>
               <span>Current</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${m.current.toFixed(2)} <span class="text-[10px] text-slate-400">A</span></div>
+            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${cur} <span class="text-[10px] text-slate-400">A</span></div>
           </div>
 
           <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
@@ -364,7 +411,7 @@ function renderMachineCards(machines) {
               <i data-lucide="gauge" class="w-3.5 h-3.5 text-emerald-400"></i>
               <span>Speed (RPM)</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${m.rpm} <span class="text-[10px] text-slate-400">rpm</span></div>
+            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${rpm} <span class="text-[10px] text-slate-400">rpm</span></div>
           </div>
 
         </div>
@@ -385,83 +432,95 @@ function renderMachineCards(machines) {
       </div>
     `;
   }).join('');
+
+  initLucide();
 }
 
 // ---------------------------------------------------------------------------
 // Chart.js Telemetry Graph
 // ---------------------------------------------------------------------------
 function initChart() {
-  const ctx = document.getElementById('telemetryChart')?.getContext('2d');
+  const canvas = document.getElementById('telemetryChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
   const metricCfg = METRIC_CONFIG[state.activeMetric];
 
-  state.chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: [],
-      datasets: [{
-        label: `${metricCfg.label} (${metricCfg.unit})`,
-        data: [],
-        borderColor: metricCfg.color,
-        backgroundColor: metricCfg.bgColor,
-        borderWidth: 2,
-        fill: true,
-        tension: 0.35,
-        pointRadius: 3,
-        pointHoverRadius: 6,
-        pointBackgroundColor: metricCfg.color,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        mode: 'index',
-        intersect: false,
+  try {
+    state.chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: `${metricCfg.label} (${metricCfg.unit})`,
+          data: [],
+          borderColor: metricCfg.color,
+          backgroundColor: metricCfg.bgColor,
+          borderWidth: 2,
+          fill: true,
+          tension: 0.35,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointBackgroundColor: metricCfg.color,
+        }]
       },
-      plugins: {
-        legend: {
-          display: true,
-          position: 'top',
-          labels: {
-            color: '#94a3b8',
-            font: { family: 'Plus Jakarta Sans', size: 12 }
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false,
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              color: '#94a3b8',
+              font: { family: 'Plus Jakarta Sans', size: 12 }
+            }
+          },
+          tooltip: {
+            backgroundColor: '#0f172a',
+            titleColor: '#f8fafc',
+            bodyColor: '#38bdf8',
+            borderColor: '#334155',
+            borderWidth: 1,
+            padding: 10,
+            boxPadding: 4,
+            usePointStyle: true,
           }
         },
-        tooltip: {
-          backgroundColor: '#0f172a',
-          titleColor: '#f8fafc',
-          bodyColor: '#38bdf8',
-          borderColor: '#334155',
-          borderWidth: 1,
-          padding: 10,
-          boxPadding: 4,
-          usePointStyle: true,
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#64748b', font: { family: 'Plus Jakarta Sans', size: 10 } }
-        },
-        y: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } }
+        scales: {
+          x: {
+            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+            ticks: { color: '#64748b', font: { family: 'Plus Jakarta Sans', size: 10 } }
+          },
+          y: {
+            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+            ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } }
+          }
         }
       }
-    }
-  });
+    });
+  } catch (err) {
+    console.warn('Chart initialization warning:', err);
+  }
 }
 
 function renderChartData(history) {
-  if (!state.chart || !history) return;
+  if (!state.chart || !history || !Array.isArray(history)) return;
 
   const metricKey = state.activeMetric;
   const metricCfg = METRIC_CONFIG[metricKey];
+  if (!metricCfg) return;
 
-  const labels = history.map(item => new Date(item.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-  const data = history.map(item => item[metricKey]);
+  const labels = history.map(item => {
+    if (!item.recorded_at) return '';
+    return new Date(item.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  });
+  const data = history.map(item => Number(item[metricKey] || 0));
 
   state.chart.data.labels = labels;
   state.chart.data.datasets[0].label = `${state.activeMachine} - ${metricCfg.label} (${metricCfg.unit})`;
@@ -470,7 +529,7 @@ function renderChartData(history) {
   state.chart.data.datasets[0].backgroundColor = metricCfg.bgColor;
   state.chart.data.datasets[0].pointBackgroundColor = metricCfg.color;
 
-  state.chart.update();
+  state.chart.update('none');
 }
 
 function setChartMachine(machineId) {
@@ -505,7 +564,7 @@ function renderAlertsTable(alerts) {
   const countEl = document.getElementById('alert-table-count');
   if (!tbody) return;
 
-  if (!alerts || alerts.length === 0) {
+  if (!alerts || !Array.isArray(alerts) || alerts.length === 0) {
     tbody.innerHTML = `
       <tr>
         <td colspan="6" class="py-6 text-center text-slate-500">No alert logs recorded yet.</td>
@@ -523,18 +582,19 @@ function renderAlertsTable(alerts) {
       ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-semibold">Sent</span>'
       : (isFailed 
         ? '<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-semibold" title="' + (a.error_message || '') + '">Failed</span>'
-        : '<span class="px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 text-[10px] font-semibold">' + a.email_status + '</span>');
+        : '<span class="px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 text-[10px] font-semibold">' + (a.email_status || 'logged') + '</span>');
 
-    const dateStr = new Date(a.sent_at).toLocaleString();
-    const recipientsStr = a.recipients.join(', ') || '(none)';
+    const dateStr = a.sent_at ? new Date(a.sent_at).toLocaleString() : 'Just now';
+    const recipientsList = Array.isArray(a.recipients) ? a.recipients.join(', ') : (a.recipients || '(none)');
+    const risk = Number(a.risk_percent || 0).toFixed(1);
 
     return `
       <tr class="hover:bg-slate-800/40 transition">
         <td class="py-2.5 px-3 font-mono text-[11px] text-slate-400">${dateStr}</td>
         <td class="py-2.5 px-3 font-bold text-teal-400 font-mono">${a.machine_id}</td>
         <td class="py-2.5 px-3 font-semibold text-rose-400">${a.status}</td>
-        <td class="py-2.5 px-3 font-mono font-bold text-slate-100">${a.risk_percent.toFixed(1)}%</td>
-        <td class="py-2.5 px-3 text-slate-400 truncate max-w-[200px]" title="${recipientsStr}">${recipientsStr}</td>
+        <td class="py-2.5 px-3 font-mono font-bold text-slate-100">${risk}%</td>
+        <td class="py-2.5 px-3 text-slate-400 truncate max-w-[200px]" title="${recipientsList}">${recipientsList}</td>
         <td class="py-2.5 px-3">${statusBadge}</td>
       </tr>
     `;
