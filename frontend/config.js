@@ -34,7 +34,7 @@ const Config = {
       const response = await fetch(`${baseUrl}/api/status`, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(6000)
+        signal: AbortSignal.timeout(20000)
       });
       const duration = Math.round(performance.now() - start);
       if (response.ok) {

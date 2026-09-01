@@ -222,7 +222,7 @@ async function fetchDashboardData(silent = false) {
   try {
     // 1. Fetch Overview (contains high level KPIs + machine statuses)
     try {
-      const overviewRes = await fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(8000) });
+      const overviewRes = await fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(20000) });
       if (overviewRes.ok) {
         const overview = await overviewRes.json();
         hasAnySuccess = true;
@@ -237,7 +237,7 @@ async function fetchDashboardData(silent = false) {
 
     // 2. Fetch Latest Readings
     try {
-      const latestRes = await fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(8000) });
+      const latestRes = await fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(20000) });
       if (latestRes.ok) {
         const machines = await latestRes.json();
         hasAnySuccess = true;
@@ -251,7 +251,7 @@ async function fetchDashboardData(silent = false) {
 
     // 3. Fetch Historical Data for Active Machine
     try {
-      const historyRes = await fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(8000) });
+      const historyRes = await fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(20000) });
       if (historyRes.ok) {
         const history = await historyRes.json();
         hasAnySuccess = true;
@@ -263,7 +263,7 @@ async function fetchDashboardData(silent = false) {
 
     // 4. Fetch Recent Alert Audit Log
     try {
-      const alertsRes = await fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(8000) });
+      const alertsRes = await fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(20000) });
       if (alertsRes.ok) {
         const alerts = await alertsRes.json();
         hasAnySuccess = true;

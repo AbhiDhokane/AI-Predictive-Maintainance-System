@@ -169,11 +169,11 @@ def generate_autonomous_cycle():
 
 
 async def telemetry_background_worker():
-    """Autonomous background loop generating continuous IoT readings every 5 seconds."""
-    await asyncio.sleep(2)  # Initial wait on startup
+    """Autonomous background loop generating continuous IoT readings every 5 seconds without blocking event loop."""
+    await asyncio.sleep(4)  # Initial wait on startup
     while True:
         try:
-            generate_autonomous_cycle()
+            await asyncio.to_thread(generate_autonomous_cycle)
         except Exception as e:
             print(f"Autonomous background telemetry error: {e}")
         await asyncio.sleep(5)
