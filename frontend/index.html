@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Predictive Maintenance System</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdfa',
+              500: '#14b8a6',
+              600: '#0d9488',
+              900: '#134e4a',
+            },
+            dark: {
+              900: '#0b0f19',
+              800: '#111827',
+              700: '#1f2937',
+              600: '#374151',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-[#0b0f19] text-slate-100 min-h-screen flex flex-col antialiased selection:bg-teal-500 selection:text-white">
+
+  <!-- TOP NAVIGATION / HEADER -->
+  <header class="sticky top-0 z-40 bg-[#111827]/80 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-8 py-3.5">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+      
+      <!-- Brand Logo & Title -->
+      <div class="flex items-center gap-3.5">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-teal-500/20 text-slate-950 font-black text-xl">
+          <i data-lucide="cpu" class="w-6 h-6 text-slate-950"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight text-white">AI Predictive Maintenance</h1>
+            <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-teal-500/10 text-teal-400 border border-teal-500/20 rounded-full">v2.0 Cloud</span>
+          </div>
+          <p class="text-xs text-slate-400">Real-time IoT Telemetry & ML Failure Risk Diagnostics</p>
+        </div>
+      </div>
+
+      <!-- Controls & Status -->
+      <div class="flex flex-wrap items-center gap-3">
+        
+        <!-- API Connection Status Badge -->
+        <button id="btn-api-status" onclick="openConfigModal()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 transition-all cursor-pointer">
+          <span id="api-status-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="api-status-text" class="text-slate-300">Connecting...</span>
+          <span id="api-latency" class="text-[10px] text-slate-500 font-mono">--ms</span>
+          <i data-lucide="settings" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+        </button>
+
+        <!-- Auto-Refresh Interval Selector -->
+        <div class="flex items-center bg-slate-800/80 border border-slate-700/80 rounded-lg p-1 text-xs">
+          <button id="btn-toggle-refresh" class="p-1.5 rounded text-teal-400 hover:bg-slate-700/60 transition" title="Toggle Auto-refresh">
+            <i id="icon-refresh-toggle" data-lucide="pause" class="w-3.5 h-3.5"></i>
+          </button>
+          <select id="select-interval" class="bg-transparent text-slate-300 text-xs px-2 py-0.5 focus:outline-none cursor-pointer">
+            <option value="3" class="bg-slate-900">3s</option>
+            <option value="5" selected class="bg-slate-900">5s</option>
+            <option value="10" class="bg-slate-900">10s</option>
+            <option value="30" class="bg-slate-900">30s</option>
+          </select>
+        </div>
+
+        <!-- Refresh Now Button -->
+        <button id="btn-refresh-now" class="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all active:scale-95">
+          <i id="icon-refresh-spin" data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
+          <span>Refresh</span>
+        </button>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT CONTAINER -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-6 space-y-6">
+
+    <!-- KPI & SYSTEM STATS STRIP -->
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+      
+      <div class="glass-panel p-4 rounded-xl">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-xs font-medium uppercase tracking-wider">Monitored Units</span>
+          <i data-lucide="server" class="w-4 h-4 text-teal-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white telemetry-val" id="stat-units">--</div>
+        <div class="text-[11px] text-slate-400 mt-1">Continuous monitoring</div>
+      </div>
+
+      <div class="glass-panel p-4 rounded-xl">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-xs font-medium uppercase tracking-wider">Max Failure Risk</span>
+          <i data-lucide="activity" class="w-4 h-4 text-rose-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-rose-400 telemetry-val" id="stat-max-risk">--%</div>
+        <div class="text-[11px] text-slate-400 mt-1" id="stat-max-risk-machine">Across fleet</div>
+      </div>
+
+      <div class="glass-panel p-4 rounded-xl">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-xs font-medium uppercase tracking-wider">Readings Logged</span>
+          <i data-lucide="database" class="w-4 h-4 text-cyan-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-cyan-400 telemetry-val" id="stat-total-readings">--</div>
+        <div class="text-[11px] text-slate-400 mt-1">In PostgreSQL</div>
+      </div>
+
+      <div class="glass-panel p-4 rounded-xl">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-xs font-medium uppercase tracking-wider">Alerts Dispatched</span>
+          <i data-lucide="mail-check" class="w-4 h-4 text-amber-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-amber-400 telemetry-val" id="stat-total-alerts">--</div>
+        <div class="text-[11px] text-slate-400 mt-1">SMTP notifications</div>
+      </div>
+
+      <div class="glass-panel p-4 rounded-xl col-span-2 md:col-span-1">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-xs font-medium uppercase tracking-wider">Fleet Status</span>
+          <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400" id="stat-status-icon"></i>
+        </div>
+        <div class="text-sm font-bold text-emerald-400 mt-1" id="stat-fleet-status">Nominal</div>
+        <div class="text-[11px] text-slate-400 mt-1" id="stat-alert-config">Threshold: 60%</div>
+      </div>
+
+    </section>
+
+    <!-- LIVE MACHINE CARDS -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>Machine Diagnostics</span>
+            <span class="flex h-2 w-2 relative">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
+            </span>
+          </h2>
+          <p class="text-xs text-slate-400">Live AI risk scores calculated per telemetry packet</p>
+        </div>
+
+        <!-- Quick simulator triggers -->
+        <div class="flex items-center gap-2">
+          <button onclick="triggerSimTick()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs rounded-lg flex items-center gap-1.5 transition">
+            <i data-lucide="play" class="w-3 h-3 text-teal-400"></i>
+            <span>Simulate Step</span>
+          </button>
+          <button onclick="openTestAlertModal()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs rounded-lg flex items-center gap-1.5 transition">
+            <i data-lucide="send" class="w-3 h-3 text-amber-400"></i>
+            <span>Test Email</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Machine Cards Grid -->
+      <div id="machines-grid" class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <!-- Machine Card skeleton placeholders (replaced dynamically by JS) -->
+        <div class="glass-panel p-6 rounded-2xl animate-pulse">
+          <div class="h-6 bg-slate-800 rounded w-1/3 mb-4"></div>
+          <div class="h-16 bg-slate-800/60 rounded mb-4"></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+          </div>
+        </div>
+        <div class="glass-panel p-6 rounded-2xl animate-pulse">
+          <div class="h-6 bg-slate-800 rounded w-1/3 mb-4"></div>
+          <div class="h-16 bg-slate-800/60 rounded mb-4"></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+          </div>
+        </div>
+        <div class="glass-panel p-6 rounded-2xl animate-pulse">
+          <div class="h-6 bg-slate-800 rounded w-1/3 mb-4"></div>
+          <div class="h-16 bg-slate-800/60 rounded mb-4"></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+            <div class="h-12 bg-slate-800/40 rounded"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TELEMETRY TIME-SERIES CHARTS -->
+    <section class="glass-panel p-6 rounded-2xl space-y-4">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i data-lucide="line-chart" class="w-4 h-4 text-teal-400"></i>
+            <span>Telemetry History Trends</span>
+          </h2>
+          <p class="text-xs text-slate-400">Chronological sensor streams from PostgreSQL</p>
+        </div>
+
+        <!-- Controls for Machine and Metric -->
+        <div class="flex flex-wrap items-center gap-2">
+          
+          <!-- Machine Selector -->
+          <div class="flex bg-slate-800/80 p-1 rounded-lg border border-slate-700/80" id="chart-machine-tabs">
+            <button onclick="setChartMachine('M01')" class="chart-machine-btn px-3 py-1 text-xs font-semibold rounded bg-teal-600 text-white transition" data-machine="M01">M01</button>
+            <button onclick="setChartMachine('M02')" class="chart-machine-btn px-3 py-1 text-xs font-semibold rounded text-slate-400 hover:text-white transition" data-machine="M02">M02</button>
+            <button onclick="setChartMachine('M03')" class="chart-machine-btn px-3 py-1 text-xs font-semibold rounded text-slate-400 hover:text-white transition" data-machine="M03">M03</button>
+          </div>
+
+          <!-- Sensor Metric Selector -->
+          <div class="flex bg-slate-800/80 p-1 rounded-lg border border-slate-700/80" id="chart-metric-tabs">
+            <button onclick="setChartMetric('temperature')" class="chart-metric-btn px-2.5 py-1 text-xs font-medium rounded bg-slate-700 text-teal-300 transition" data-metric="temperature">Temp (°C)</button>
+            <button onclick="setChartMetric('vibration')" class="chart-metric-btn px-2.5 py-1 text-xs font-medium rounded text-slate-400 hover:text-white transition" data-metric="vibration">Vibration</button>
+            <button onclick="setChartMetric('current')" class="chart-metric-btn px-2.5 py-1 text-xs font-medium rounded text-slate-400 hover:text-white transition" data-metric="current">Current</button>
+            <button onclick="setChartMetric('rpm')" class="chart-metric-btn px-2.5 py-1 text-xs font-medium rounded text-slate-400 hover:text-white transition" data-metric="rpm">RPM</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Chart Canvas Container -->
+      <div class="w-full h-72 relative">
+        <canvas id="telemetryChart"></canvas>
+      </div>
+    </section>
+
+    <!-- RECENT ALERTS & INCIDENT HISTORY -->
+    <section class="glass-panel p-6 rounded-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i data-lucide="bell" class="w-4 h-4 text-amber-400"></i>
+            <span>Recent Incident & Alert Log</span>
+          </h2>
+          <p class="text-xs text-slate-400">Audit trail of failure warnings and email transmissions</p>
+        </div>
+        <span class="text-xs text-slate-500 font-mono" id="alert-table-count">Showing last 10</span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr class="text-slate-400 border-b border-slate-800/80">
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Timestamp</th>
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Machine</th>
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Status</th>
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Failure Risk</th>
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Recipients</th>
+              <th class="py-2.5 px-3 font-semibold uppercase tracking-wider">Delivery</th>
+            </tr>
+          </thead>
+          <tbody id="alerts-table-body" class="divide-y divide-slate-800/40 text-slate-300">
+            <tr>
+              <td colspan="6" class="py-6 text-center text-slate-500">Loading alerts log...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="mt-auto border-t border-slate-800/80 py-4 px-4 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div>AI Predictive Maintenance System • Separated Architecture</div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <span>Backend: <strong class="text-slate-300">Render / FastAPI</strong></span>
+        <span>Frontend: <strong class="text-slate-300">Vercel SPA</strong></span>
+        <span>Database: <strong class="text-slate-300">PostgreSQL</strong></span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- API CONFIGURATION MODAL -->
+  <div id="modal-config" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i data-lucide="sliders" class="w-4 h-4 text-teal-400"></i>
+          <span>Backend API Settings</span>
+        </h3>
+        <button onclick="closeConfigModal()" class="text-slate-400 hover:text-white p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">FastAPI Backend URL</label>
+          <input type="text" id="input-api-url" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-teal-500 font-mono text-xs" placeholder="https://your-api.onrender.com or http://localhost:8000">
+          <p class="text-[11px] text-slate-500 mt-1">For local dev: <code class="text-teal-400">http://localhost:8000</code>. For Render: paste your Render Web Service URL.</p>
+        </div>
+
+        <div id="config-test-result" class="hidden p-3 rounded-lg text-xs"></div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="testConfigUrl()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium transition">
+          Test Connection
+        </button>
+        <button onclick="saveConfigUrl()" class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-lg text-xs font-semibold shadow transition">
+          Save & Connect
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TEST EMAIL MODAL -->
+  <div id="modal-test-email" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i data-lucide="mail" class="w-4 h-4 text-amber-400"></i>
+          <span>Send Test Email Alert</span>
+        </h3>
+        <button onclick="closeTestAlertModal()" class="text-slate-400 hover:text-white p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <p class="text-slate-300">This sends a real test notification via your backend's configured SMTP server to verify email dispatching.</p>
+        <div>
+          <label class="block font-medium text-slate-400 mb-1">Recipient Override (Optional)</label>
+          <input type="email" id="input-test-recipient" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-teal-500 font-mono text-xs" placeholder="Leave blank to use .env recipients">
+        </div>
+        <div id="test-email-result" class="hidden p-3 rounded-lg text-xs"></div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="closeTestAlertModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition">
+          Cancel
+        </button>
+        <button id="btn-submit-test-email" onclick="submitTestEmail()" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold shadow transition flex items-center gap-1.5">
+          <i data-lucide="send" class="w-3.5 h-3.5"></i>
+          <span>Send Test Email</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"></div>
+
+  <!-- Load Config and App Scripts -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

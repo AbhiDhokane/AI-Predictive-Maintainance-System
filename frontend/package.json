@@ -1,0 +1,15 @@
+{
+  "name": "ai-predictive-maintenance-frontend",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Real-time AI Predictive Maintenance Dashboard for Vercel Deployment",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "npx serve ."
+  },
+  "devDependencies": {
+    "vite": "^5.1.4"
+  }
+}

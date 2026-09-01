@@ -1,99 +1,158 @@
-# AI Predictive Maintenance - Enhanced Edition (with real email alerts)
+# 🏭 AI Predictive Maintenance System (Cloud Architecture)
 
-Monitors multiple machines (M01-M03), four simulated sensors per machine,
-uses a Random Forest model to predict failure risk, shows a live
-Streamlit dashboard, and **sends a real email** to the maintenance team
-whenever a machine's predicted failure risk crosses a threshold.
+An enterprise-grade, cloud-ready Predictive Maintenance IoT & AI Telemetry System. Monitors industrial machines (`M01`–`M03`), performs real-time Machine Learning failure risk classification using a trained Random Forest model, visualizes live telemetry graphs, and dispatches automated **SMTP email alerts** with per-machine cooldowns when critical risk thresholds are crossed.
 
-## What's new vs. the original version
-- **Real SMTP email alerts** (`alerts.py`) when a machine hits "HIGH FAILURE RISK".
-- **Per-machine cooldown** so the same machine can't spam your inbox every
-  few seconds while it stays unhealthy (configurable, default 15 minutes).
-- **Alert history table** (`alert_log`) in PostgreSQL + a panel in the
-  dashboard showing every alert attempt, sent or failed, and why.
-- **Credentials moved out of source code** into a local `.env` file
-  (via `python-dotenv`) instead of being hard-coded in `config.py`.
-- **`test_email.py`** — a one-command way to verify your SMTP setup works
-  before trusting it inside the live app.
-- Schema creation is automatic (`ensure_schema()`), so you no longer have
-  to run the SQL file by hand (though you still can).
+---
 
-## Setup
+## 🏗️ Architecture Overview
 
-1. **Install PostgreSQL** and create the database:
-   ```
-   psql -U postgres -f postgres_setup.sql
-   ```
-   (Or just let the app create the tables automatically on first run.)
+The system is decoupled into two independent modules designed for scalable cloud hosting:
 
-2. **Install dependencies**
-   ```
-   pip install -r requirements.txt
-   ```
+```
+┌────────────────────────────────────────────────────────┐
+│               Frontend (Vercel Deployable)             │
+│  - Modern Real-Time Dashboard (Tailwind + Chart.js)    │
+│  - Live Telemetry Metrics (Temp, Vibration, Curr, RPM) │
+│  - Radial Risk Gauges & Automated Incident Log         │
+│  - Configurable Backend URL (VITE_API_URL / In-App)    │
+└───────────────────────────┬────────────────────────────┘
+                            │ HTTPS / REST API (CORS)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│               Backend (Render Deployable)              │
+│  - FastAPI Asynchronous REST API (Uvicorn)             │
+│  - Scikit-Learn ML Inference Engine (Random Forest)    │
+│  - SMTP Email Alert Service with Anti-Spam Cooldown    │
+│  - Interactive Simulation Engine (/api/simulator)      │
+└───────────────────────────┬────────────────────────────┘
+                            │ PostgreSQL Connection (SSL)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│           Database (Render PostgreSQL / Cloud)         │
+│  - sensor_readings (Historical telemetry streams)      │
+│  - alert_log (Audit trail of dispatched alerts)        │
+└────────────────────────────────────────────────────────┘
+```
 
-3. **Configure secrets**
-   ```
-   cp .env.example .env
-   ```
-   Then edit `.env` and fill in:
-   - Your PostgreSQL host/user/password.
-   - Your SMTP settings. For Gmail:
-     1. Turn on 2-Step Verification on the sending Gmail account.
-     2. Create an **App Password** at
-        https://myaccount.google.com/apppasswords
-     3. Use that 16-character app password as `SMTP_PASSWORD` (your normal
-        Gmail password will not work for SMTP login).
-   - `ALERT_RECIPIENTS` — comma-separated list of who should get the alerts.
-   - `ALERT_RISK_THRESHOLD` — risk % (0-100) that triggers an email
-     (default 60).
-   - `ALERT_COOLDOWN_MINUTES` — minimum time between two alerts for the
-     same machine (default 15).
+---
 
-   Other SMTP providers work too (Outlook: `smtp.office365.com:587`,
-   Yahoo: `smtp.mail.yahoo.com:587`, or your company's mail server) — just
-   change `SMTP_HOST` / `SMTP_PORT` accordingly.
+## ⚡ Quickstart (Local Development)
 
-4. **Test your email setup**
-   ```
-   python test_email.py
-   ```
-   You should see "Test email sent successfully" and receive it in your
-   inbox. Fix any errors it reports before moving on.
+You can run both the FastAPI backend and the frontend dashboard locally with **one single command**:
 
-5. **Train the model**
-   ```
-   python train_model.py
-   ```
+```bash
+# 1. Install dependencies
+pip install -r backend/requirements.txt
 
-6. **Run the simulator** (Terminal 1)
-   ```
-   python sensor_simulator.py
-   ```
+# 2. Configure environment (PostgreSQL & SMTP)
+cp backend/.env.example backend/.env
+# Edit backend/.env with your DB password and SMTP credentials
 
-7. **Run the dashboard** (Terminal 2)
-   ```
-   streamlit run app.py
-   ```
+# 3. Start both services together!
+python run_local.py
+```
 
-The simulator mostly generates normal readings with occasional abnormal
-spikes. When a machine's predicted risk reaches the threshold, the
-dashboard will show "🚨 Maintenance recommended" **and** trigger a real
-email to everyone in `ALERT_RECIPIENTS` (subject to the cooldown).
+- **Frontend Dashboard:** [http://localhost:3000](http://localhost:3000)
+- **FastAPI Backend:** [http://localhost:8000](http://localhost:8000)
+- **Interactive Swagger API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
 
-## Disabling email alerts temporarily
-Set `EMAIL_ALERTS_ENABLED=false` in `.env` — the dashboard will keep
-working exactly as before, just without sending mail. This is useful
-for demos where you don't want to trigger real emails.
+---
 
-## Files
-| File | Purpose |
-|---|---|
-| `app.py` | Streamlit dashboard, prediction, wires up alerts |
-| `alerts.py` | Builds and sends the SMTP email, applies cooldown, logs result |
-| `database.py` | PostgreSQL access: readings + alert log |
-| `config.py` | Loads all settings from `.env` |
-| `train_model.py` | Trains and saves the Random Forest model |
-| `sensor_simulator.py` | Generates fake sensor data into PostgreSQL |
-| `test_email.py` | Standalone SMTP connectivity/delivery check |
-| `postgres_setup.sql` | Manual schema creation (optional, auto-run otherwise) |
-| `.env.example` | Template for your local `.env` (never commit the real `.env`) |
+## 🚀 Deployment Guide
+
+### Part 1: Deploy Backend to [Render](https://render.com)
+
+1. **Push your code to GitHub / GitLab**.
+2. Log into [Render Dashboard](https://dashboard.render.com/) and click **New +** -> **PostgreSQL**:
+   - **Name:** `predictive-maintenance-db`
+   - **Database:** `maintenance`
+   - Click **Create Database** and copy the **Internal Database URL** (or External Database URL).
+3. Click **New +** -> **Web Service**:
+   - Connect your Git repository.
+   - **Root Directory:** `backend`
+   - **Runtime:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+4. In the **Environment Variables** section, add:
+   - `DATABASE_URL`: *(Paste your Render PostgreSQL connection string)*
+   - `CORS_ORIGINS`: `*` (or your Vercel URL once created)
+   - `SMTP_HOST`: `smtp.gmail.com`
+   - `SMTP_PORT`: `587`
+   - `SMTP_USER`: `your-email@gmail.com`
+   - `SMTP_PASSWORD`: `your-16-char-app-password` *(Generated from Google Account App Passwords)*
+   - `ALERT_RECIPIENTS`: `lead-engineer@example.com,team@example.com`
+   - `ALERT_RISK_THRESHOLD`: `60`
+   - `ALERT_COOLDOWN_MINUTES`: `15`
+   - `EMAIL_ALERTS_ENABLED`: `true`
+5. Click **Create Web Service**.
+6. Once deployed, copy your backend service URL (e.g., `https://ai-predictive-maintenance-api.onrender.com`).
+
+---
+
+### Part 2: Deploy Frontend to [Vercel](https://vercel.com)
+
+1. Log into [Vercel Dashboard](https://vercel.com/) and click **Add New...** -> **Project**.
+2. Import your Git repository.
+3. In the project setup configuration:
+   - **Framework Preset:** `Other` (or `Vite`)
+   - **Root Directory:** Click **Edit** and select `frontend`
+   - **Build Command:** *(Leave default or empty)*
+   - **Output Directory:** *(Leave default or `.`)*
+4. Under **Environment Variables**, add:
+   - `VITE_API_URL`: *(Your Render backend URL, e.g. `https://ai-predictive-maintenance-api.onrender.com`)*
+5. Click **Deploy**.
+
+> 💡 **Tip:** You can also dynamically change or test the backend URL directly inside the live frontend UI at any time by clicking the **API Status / Settings** button in the header!
+
+---
+
+## 📡 REST API Reference
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | `GET` | Service health check and machine listing |
+| `/api/overview` | `GET` | System stats, fleet overview & latest readings |
+| `/api/machines` | `GET` | List of all monitored machines (`["M01", "M02", "M03"]`) |
+| `/api/readings/latest` | `GET` | Latest telemetry + AI predicted risk per machine |
+| `/api/readings/history` | `GET` | Time-series sensor history for charts (`?machine_id=M01&limit=50`) |
+| `/api/readings` | `POST` | Ingest sensor data, run ML prediction & trigger email alert if risk ≥ threshold |
+| `/api/predict` | `POST` | Direct inference endpoint for raw sensor inputs |
+| `/api/alerts/recent` | `GET` | Recent alert history log from `alert_log` |
+| `/api/alerts/test` | `POST` | Dispatch a live test email via SMTP |
+| `/api/simulator/tick` | `POST` | Generate 1 simulated telemetry cycle across all machines |
+| `/api/simulator/hazard` | `POST` | Inject an abnormal sensor spike into a specific machine |
+
+---
+
+## 📁 Repository Structure
+
+```
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py            # FastAPI REST API & routes
+│   │   ├── config.py          # Config loader (DATABASE_URL, .env)
+│   │   ├── database.py        # PostgreSQL access layer & schema migration
+│   │   ├── ml_model.py        # ML inference engine
+│   │   ├── alerts.py          # SMTP email alerting & cooldowns
+│   │   └── schemas.py         # Pydantic data models
+│   ├── model/
+│   │   └── failure_model.pkl  # Trained Random Forest classifier
+│   ├── sensor_simulator.py    # Background CLI sensor generator
+│   ├── train_model.py         # Model training script
+│   ├── test_email.py          # SMTP testing script
+│   ├── requirements.txt       # Python backend dependencies
+│   ├── render.yaml            # Render Blueprint deployment config
+│   ├── Procfile               # Render startup procfile
+│   └── .env.example           # Backend env template
+├── frontend/
+│   ├── index.html             # High-performance dashboard SPA
+│   ├── app.js                 # Dashboard controller, polling & chart updates
+│   ├── config.js              # Dynamic API connection manager
+│   ├── style.css              # Custom styling, glow animations & themes
+│   ├── vercel.json            # Vercel routing & headers configuration
+│   ├── package.json           # Vercel build compatibility
+│   └── vite.config.js         # Vite configuration
+├── run_local.py               # 1-command runner for local development
+└── README.md                  # Comprehensive documentation
+```
