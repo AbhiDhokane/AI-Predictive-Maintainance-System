@@ -48,6 +48,46 @@ const METRIC_CONFIG = {
   }
 };
 
+// Clean Timezone Formatter - converts UTC database timestamps to user's exact local time
+function formatLocalTime(ts) {
+  if (!ts) return 'Just now';
+  try {
+    let dStr = String(ts);
+    if (!dStr.endsWith('Z') && !dStr.includes('+') && !dStr.includes('GMT')) {
+      if (dStr.includes('T')) dStr = dStr + 'Z';
+      else if (dStr.includes(' ')) dStr = dStr.replace(' ', 'T') + 'Z';
+    }
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (_) {
+    return String(ts);
+  }
+}
+
+function formatLocalDateTime(ts) {
+  if (!ts) return 'Just now';
+  try {
+    let dStr = String(ts);
+    if (!dStr.endsWith('Z') && !dStr.includes('+') && !dStr.includes('GMT')) {
+      if (dStr.includes('T')) dStr = dStr + 'Z';
+      else if (dStr.includes(' ')) dStr = dStr.replace(' ', 'T') + 'Z';
+    }
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString([], {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch (_) {
+    return String(ts);
+  }
+}
+
 // DOM Content Loaded
 document.addEventListener('DOMContentLoaded', () => {
   initLucide();
@@ -187,7 +227,7 @@ async function fetchDashboardData(silent = false) {
       console.warn('Overview fetch warning:', e);
     }
 
-    // 2. Fetch Latest Readings (if not already populated or for freshest readings)
+    // 2. Fetch Latest Readings
     try {
       const latestRes = await fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(8000) });
       if (latestRes.ok) {
@@ -336,7 +376,7 @@ function renderMachineCards(machines) {
     const statusBg = isCritical ? 'bg-rose-500/15 border-rose-500/30 text-rose-400' : (isWarning ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400');
     const glowClass = isCritical ? 'glow-rose border-rose-500/40' : (isWarning ? 'glow-amber border-amber-500/30' : 'border-slate-800');
     const riskMeterColor = isCritical ? '#f43f5e' : (isWarning ? '#f59e0b' : '#10b981');
-    const timeFormatted = m.recorded_at ? new Date(m.recorded_at).toLocaleTimeString() : 'Just now';
+    const timeFormatted = formatLocalTime(m.recorded_at);
 
     const temp = Number(m.temperature || 0).toFixed(1);
     const vib = Number(m.vibration || 0).toFixed(2);
@@ -516,10 +556,7 @@ function renderChartData(history) {
   const metricCfg = METRIC_CONFIG[metricKey];
   if (!metricCfg) return;
 
-  const labels = history.map(item => {
-    if (!item.recorded_at) return '';
-    return new Date(item.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  });
+  const labels = history.map(item => formatLocalTime(item.recorded_at));
   const data = history.map(item => Number(item[metricKey] || 0));
 
   state.chart.data.labels = labels;
@@ -584,7 +621,7 @@ function renderAlertsTable(alerts) {
         ? '<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-semibold" title="' + (a.error_message || '') + '">Failed</span>'
         : '<span class="px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-400 text-[10px] font-semibold">' + (a.email_status || 'logged') + '</span>');
 
-    const dateStr = a.sent_at ? new Date(a.sent_at).toLocaleString() : 'Just now';
+    const dateStr = formatLocalDateTime(a.sent_at);
     const recipientsList = Array.isArray(a.recipients) ? a.recipients.join(', ') : (a.recipients || '(none)');
     const risk = Number(a.risk_percent || 0).toFixed(1);
 

@@ -3,6 +3,7 @@ PostgreSQL database layer for AI Predictive Maintenance System.
 Supports both direct DATABASE_URL (e.g., Render/Neon/Supabase) and discrete DB_* parameters.
 """
 import psycopg2
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Any
 from app.config import DATABASE_URL, DB_CONFIG
@@ -12,10 +13,8 @@ def get_connection():
     """Create a new database connection with appropriate SSL and URL handling."""
     if DATABASE_URL:
         dsn = DATABASE_URL
-        # Render provides postgres://, psycopg2 works with postgresql:// or postgres://
         if dsn.startswith("postgres://"):
             dsn = "postgresql://" + dsn[len("postgres://"):]
-        # If cloud postgres, enforce sslmode require if not already present
         if "sslmode=" not in dsn and "localhost" not in dsn and "127.0.0.1" not in dsn:
             sep = "&" if "?" in dsn else "?"
             dsn = f"{dsn}{sep}sslmode=require"
@@ -32,6 +31,17 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+
+def _format_ts(dt):
+    """Ensure timestamps are formatted as ISO 8601 UTC strings."""
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc).isoformat()
+        return dt.isoformat()
+    return str(dt)
 
 
 def ensure_schema():
@@ -83,7 +93,7 @@ def insert_reading(machine_id: str, temperature: float, vibration: float, curren
             """, (machine_id, temperature, vibration, current, rpm))
             row = cur.fetchone()
             conn.commit()
-            return {"id": row[0], "recorded_at": row[1]}
+            return {"id": row[0], "recorded_at": _format_ts(row[1])}
 
 
 def latest() -> List[Dict[str, Any]]:
@@ -104,7 +114,7 @@ def latest() -> List[Dict[str, Any]]:
                     "vibration": r[2],
                     "current": r[3],
                     "rpm": r[4],
-                    "recorded_at": r[5],
+                    "recorded_at": _format_ts(r[5]),
                 }
                 for r in rows
             ]
@@ -122,14 +132,13 @@ def history(machine_id: str, limit: int = 100) -> List[Dict[str, Any]]:
                 LIMIT %s;
             """, (machine_id, limit))
             rows = cur.fetchall()
-            # Return in chronological order (oldest to newest) for charting
             return [
                 {
                     "temperature": r[0],
                     "vibration": r[1],
                     "current": r[2],
                     "rpm": r[3],
-                    "recorded_at": r[4],
+                    "recorded_at": _format_ts(r[4]),
                 }
                 for r in reversed(rows)
             ]
@@ -179,7 +188,7 @@ def recent_alerts(limit: int = 20) -> List[Dict[str, Any]]:
                     "recipients": [rec.strip() for rec in r[4].split(",") if rec.strip()],
                     "email_status": r[5],
                     "error_message": r[6],
-                    "sent_at": r[7],
+                    "sent_at": _format_ts(r[7]),
                 }
                 for r in rows
             ]

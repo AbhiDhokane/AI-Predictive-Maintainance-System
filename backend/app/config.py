@@ -52,7 +52,12 @@ DB_CONFIG = {
 # ---------------------------------------------------------------------------
 EMAIL_ALERTS_ENABLED = _get_bool("EMAIL_ALERTS_ENABLED", True)
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+
 EMAIL_CONFIG = {
+    "resend_api_key": RESEND_API_KEY,
+    "brevo_api_key": BREVO_API_KEY,
     "smtp_host": os.getenv("SMTP_HOST", "smtp.gmail.com"),
     "smtp_port": _get_int("SMTP_PORT", 587),
     "smtp_user": os.getenv("SMTP_USER", ""),

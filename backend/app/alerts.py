@@ -1,11 +1,13 @@
 """
 Email Alert Service for AI Predictive Maintenance System.
-Handles SMTP notifications with HTML formatting, cooldown enforcement, and database logging.
-Forces IPv4 socket resolution to prevent '[Errno 101] Network is unreachable' on cloud hosts.
+Supports both modern HTTPS Email APIs (Resend, Brevo) and standard SMTP (Gmail, Outlook).
+HTTPS APIs bypass cloud firewall restrictions where SMTP ports (25, 465, 587) are blocked.
 """
 import smtplib
 import socket
 import ssl
+import json
+import urllib.request
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -48,12 +50,10 @@ class IPv4SMTP_SSL(smtplib.SMTP_SSL):
         return self.context.wrap_socket(sock, server_hostname=self._host)
 
 
-def _build_email(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any], recipients: List[str]) -> MIMEMultipart:
-    cfg = EMAIL_CONFIG
+def _build_email_contents(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any]):
     subject = f"🚨 [CRITICAL ALERT] {machine_id} - {status} ({risk_percent:.1f}% Failure Risk)"
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Plain text fallback
     plain_text = f"""\
 AI Predictive Maintenance Alert
 =================================
@@ -72,7 +72,6 @@ Recommended Action:
 Schedule immediate mechanical and thermal inspection for Machine {machine_id}.
     """
 
-    # Modern HTML email
     html_content = f"""\
 <!DOCTYPE html>
 <html>
@@ -128,44 +127,84 @@ Schedule immediate mechanical and thermal inspection for Machine {machine_id}.
 </body>
 </html>
     """
+    return subject, plain_text, html_content
 
+
+def _send_via_resend(api_key: str, recipients: List[str], subject: str, html: str, text: str):
+    """Dispatch email using Resend HTTPS API (Port 443 - works on Render Free Tier)."""
+    cfg = EMAIL_CONFIG
+    from_addr = "AI Predictive Maintenance <onboarding@resend.dev>"
+    if cfg.get("email_from") and "@gmail.com" not in cfg.get("email_from", ""):
+        from_addr = cfg["email_from"]
+
+    payload = {
+        "from": from_addr,
+        "to": recipients,
+        "subject": subject,
+        "html": html,
+        "text": text,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "AIPredictiveMaintenance/2.0",
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _send_via_brevo(api_key: str, recipients: List[str], subject: str, html: str, text: str):
+    """Dispatch email using Brevo HTTPS API (Port 443)."""
+    cfg = EMAIL_CONFIG
+    payload = {
+        "sender": {"name": "AI Predictive Maintenance", "email": cfg.get("email_from") or "alerts@predictive-maintenance.com"},
+        "to": [{"email": r} for r in recipients],
+        "subject": subject,
+        "htmlContent": html,
+        "textContent": text,
+    }
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _send_via_smtp(recipients: List[str], subject: str, html: str, text: str):
+    """Dispatch email over SMTP with dual-port fallback (465 SSL <-> 587 STARTTLS)."""
+    cfg = EMAIL_CONFIG
     msg = MIMEMultipart("alternative")
     msg["From"] = cfg["email_from"] or cfg["smtp_user"]
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
+    msg.attach(MIMEText(text, "plain"))
+    msg.attach(MIMEText(html, "html"))
 
-    msg.attach(MIMEText(plain_text, "plain"))
-    msg.attach(MIMEText(html_content, "html"))
-    return msg
-
-
-def _send_smtp_dispatch(msg: MIMEMultipart, recipients: List[str]):
-    """
-    Dispatches email via IPv4 SMTP with dual-port fallback (Port 587 STARTTLS <-> Port 465 SSL)
-    to guarantee delivery across cloud firewall and networking constraints.
-    """
-    cfg = EMAIL_CONFIG
     context = ssl.create_default_context()
     last_err = None
 
-    # Primary attempt with configured port
-    primary_port = cfg.get("smtp_port", 587)
-    ports_to_try = [primary_port]
-    # Add alternative port fallback (465 if 587, or 587 if 465)
-    if primary_port == 587:
-        ports_to_try.append(465)
-    elif primary_port == 465:
-        ports_to_try.append(587)
-
-    for port in ports_to_try:
+    # Try port 465 first (often allowed where 587 is blocked)
+    for port in [465, 587]:
         try:
             if port == 465:
-                with IPv4SMTP_SSL(cfg["smtp_host"], port, context=context, timeout=12) as server:
+                with IPv4SMTP_SSL(cfg["smtp_host"], port, context=context, timeout=8) as server:
                     server.login(cfg["smtp_user"], cfg["smtp_password"])
                     server.sendmail(cfg["email_from"] or cfg["smtp_user"], recipients, msg.as_string())
                     return True
             else:
-                with IPv4SMTP(cfg["smtp_host"], port, timeout=12) as server:
+                with IPv4SMTP(cfg["smtp_host"], port, timeout=8) as server:
                     server.ehlo()
                     server.starttls(context=context)
                     server.ehlo()
@@ -177,11 +216,33 @@ def _send_smtp_dispatch(msg: MIMEMultipart, recipients: List[str]):
             continue
 
     if last_err:
+        err_str = str(last_err)
+        if "timed out" in err_str.lower() or "101" in err_str:
+            raise RuntimeError(
+                "SMTP timed out. Note: Render Free Tier blocks outbound SMTP ports 587/465. "
+                "For instant email on Render, add a free RESEND_API_KEY in Render Environment Variables."
+            )
         raise last_err
 
 
+def _dispatch_email(recipients: List[str], subject: str, html: str, text: str):
+    """
+    Intelligent email dispatcher:
+    1. If RESEND_API_KEY is configured -> sends over HTTPS (Port 443)
+    2. If BREVO_API_KEY is configured  -> sends over HTTPS (Port 443)
+    3. Else                            -> sends over SMTP (Port 465/587)
+    """
+    cfg = EMAIL_CONFIG
+    if cfg.get("resend_api_key"):
+        return _send_via_resend(cfg["resend_api_key"], recipients, subject, html, text)
+    elif cfg.get("brevo_api_key"):
+        return _send_via_brevo(cfg["brevo_api_key"], recipients, subject, html, text)
+    else:
+        return _send_via_smtp(recipients, subject, html, text)
+
+
 def is_cooldown_active(machine_id: str) -> bool:
-    """Check if the cooldown period has elapsed since the last sent email for this machine."""
+    """Check if cooldown is active for this machine."""
     last = last_alert_time(machine_id)
     if last is None:
         return False
@@ -189,33 +250,28 @@ def is_cooldown_active(machine_id: str) -> bool:
 
 
 def maybe_send_alert(machine_id: str, status: str, risk_percent: float, sensor: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Send an email alert if:
-      - Email alerts are enabled in config
-      - Risk percent is at/above ALERT_RISK_THRESHOLD
-      - Cooldown window has elapsed
-    """
+    """Evaluate risk threshold and send alert email if needed."""
     if not EMAIL_ALERTS_ENABLED:
-        return {"sent": False, "reason": "disabled", "message": "Email alerts are disabled in configuration."}
+        return {"sent": False, "reason": "disabled", "message": "Email alerts disabled."}
 
     if risk_percent < ALERT_RISK_THRESHOLD:
-        return {"sent": False, "reason": "below_threshold", "message": f"Risk ({risk_percent}%) below threshold ({ALERT_RISK_THRESHOLD}%)."}
+        return {"sent": False, "reason": "below_threshold"}
 
     if is_cooldown_active(machine_id):
-        return {"sent": False, "reason": "cooldown", "message": f"Alert cooldown active for {machine_id} (last alert sent within {ALERT_COOLDOWN_MINUTES} mins)."}
+        return {"sent": False, "reason": "cooldown", "message": f"Cooldown active for {machine_id}."}
 
     cfg = EMAIL_CONFIG
     recipients = cfg.get("recipients", [])
-    if not cfg.get("smtp_user") or not cfg.get("smtp_password") or not recipients:
-        msg = "Missing SMTP credentials or recipients in .env configuration."
+    if not recipients:
+        msg = "Missing ALERT_RECIPIENTS in configuration."
         log_alert(machine_id, risk_percent, status, recipients, "failed", msg)
         return {"sent": False, "reason": "not_configured", "error": msg}
 
-    msg = _build_email(machine_id, status, risk_percent, sensor, recipients)
+    subject, plain_text, html_content = _build_email_contents(machine_id, status, risk_percent, sensor)
     try:
-        _send_smtp_dispatch(msg, recipients)
+        _dispatch_email(recipients, subject, html_content, plain_text)
         log_alert(machine_id, risk_percent, status, recipients, "sent")
-        return {"sent": True, "reason": "ok", "message": f"Alert successfully sent to {', '.join(recipients)}"}
+        return {"sent": True, "reason": "ok", "message": f"Alert sent to {', '.join(recipients)}"}
     except Exception as e:
         error_msg = str(e)
         log_alert(machine_id, risk_percent, status, recipients, "failed", error_msg)
@@ -223,18 +279,17 @@ def maybe_send_alert(machine_id: str, status: str, risk_percent: float, sensor: 
 
 
 def send_test_email(recipient: Optional[str] = None) -> Dict[str, Any]:
-    """Trigger a manual test email to verify SMTP delivery."""
+    """Trigger test email notification."""
     fake_sensor = {"temperature": 94.2, "vibration": 6.1, "current": 10.5, "rpm": 1020}
     cfg = EMAIL_CONFIG
     recipients = [recipient] if recipient else cfg.get("recipients", [])
 
-    if not cfg.get("smtp_user") or not cfg.get("smtp_password") or not recipients:
-        return {"sent": False, "reason": "not_configured", "error": "SMTP credentials or recipients not set."}
+    if not recipients:
+        return {"sent": False, "reason": "not_configured", "error": "No recipient specified."}
 
-    msg = _build_email("M01-TEST", "HIGH FAILURE RISK (TEST)", 92.5, fake_sensor, recipients)
-
+    subject, plain_text, html_content = _build_email_contents("M01-TEST", "HIGH FAILURE RISK (TEST)", 92.5, fake_sensor)
     try:
-        _send_smtp_dispatch(msg, recipients)
+        _dispatch_email(recipients, subject, html_content, plain_text)
         log_alert("M01-TEST", 92.5, "HIGH FAILURE RISK (TEST)", recipients, "sent")
         return {"sent": True, "reason": "ok", "message": f"Test alert sent to {', '.join(recipients)}"}
     except Exception as e:
