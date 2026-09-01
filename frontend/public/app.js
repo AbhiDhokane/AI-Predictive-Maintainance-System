@@ -463,10 +463,16 @@ function renderMachineCards(machines) {
             <i data-lucide="chevron-right" class="w-3 h-3"></i>
           </button>
           
-          <button onclick="triggerHazard('${m.machine_id}')" class="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition" title="Inject abnormal spike on ${m.machine_id}">
-            <i data-lucide="zap-off" class="w-3 h-3"></i>
-            <span>Inject Hazard</span>
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button onclick="restoreNormal('${m.machine_id}')" class="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition" title="Restore healthy normal readings on ${m.machine_id}">
+              <i data-lucide="check" class="w-3 h-3"></i>
+              <span>Fix / Heal</span>
+            </button>
+            <button onclick="triggerHazard('${m.machine_id}')" class="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition" title="Inject abnormal spike on ${m.machine_id}">
+              <i data-lucide="zap-off" class="w-3 h-3"></i>
+              <span>Hazard</span>
+            </button>
+          </div>
         </div>
 
       </div>
@@ -672,6 +678,21 @@ async function triggerHazard(machineId) {
   }
 }
 
+async function restoreNormal(machineId) {
+  const baseUrl = Config.getApiUrl();
+  try {
+    const res = await fetch(`${baseUrl}/api/simulator/normalize?machine_id=${machineId}`, { method: 'POST' });
+    if (res.ok) {
+      showToast('Machine Restored', `Machine ${machineId} returned to healthy nominal range.`, 'info');
+      await fetchDashboardData();
+    } else {
+      showToast('Error', `Could not restore normal state on ${machineId}`, 'error');
+    }
+  } catch (err) {
+    showToast('Error', err.message, 'error');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Modals & Settings
 // ---------------------------------------------------------------------------
@@ -819,6 +840,7 @@ window.setChartMachine = setChartMachine;
 window.setChartMetric = setChartMetric;
 window.triggerSimTick = triggerSimTick;
 window.triggerHazard = triggerHazard;
+window.restoreNormal = restoreNormal;
 window.openConfigModal = openConfigModal;
 window.closeConfigModal = closeConfigModal;
 window.testConfigUrl = testConfigUrl;

@@ -334,4 +334,24 @@ def trigger_hazard(machine_id: str = Query(..., description="Target machine ID (
             rpm=random.randint(900, 1200),
         )
     )
-    return {"message": f"Hazard simulated on {machine_id}", "reading": reading}
+    return {"message": f"Hazard injected on {machine_id}", "reading": reading}
+
+
+@app.post("/api/simulator/normalize", tags=["Simulator"])
+def normalize_machine(machine_id: str = Query(..., description="Target machine ID (e.g. M03)")):
+    """
+    Inject a healthy, normal reading on a machine to restore it from failure state.
+    """
+    if machine_id not in MACHINES:
+        raise HTTPException(status_code=400, detail=f"Machine {machine_id} is not in monitored list.")
+
+    reading = create_sensor_reading(
+        SensorReadingCreate(
+            machine_id=machine_id,
+            temperature=round(random.uniform(58, 68), 2),
+            vibration=round(random.uniform(1.2, 2.2), 2),
+            current=round(random.uniform(4.5, 6.2), 2),
+            rpm=random.randint(1550, 1720),
+        )
+    )
+    return {"message": f"Machine {machine_id} telemetry restored to normal healthy range.", "reading": reading}
