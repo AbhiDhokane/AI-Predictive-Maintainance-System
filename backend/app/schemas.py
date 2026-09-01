@@ -2,7 +2,7 @@
 Pydantic Schemas for AI Predictive Maintenance REST API.
 """
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 
 
@@ -21,7 +21,7 @@ class SensorReadingResponse(BaseModel):
     vibration: float
     current: float
     rpm: int
-    recorded_at: datetime
+    recorded_at: Union[datetime, str]
 
 
 class MachineLatestStatus(BaseModel):
@@ -30,9 +30,10 @@ class MachineLatestStatus(BaseModel):
     vibration: float
     current: float
     rpm: int
-    recorded_at: datetime
-    status: str  # NORMAL, WARNING, HIGH FAILURE RISK
+    recorded_at: Union[datetime, str]
+    status: str  # NORMAL, WARNING, HIGH FAILURE RISK, EMERGENCY STOPPED
     risk_percent: float
+    operational_state: Optional[str] = "RUNNING"  # "RUNNING" or "TRIPPED_STOPPED"
     alert_info: Optional[Dict[str, Any]] = None
 
 
@@ -41,7 +42,7 @@ class HistoryPoint(BaseModel):
     vibration: float
     current: float
     rpm: int
-    recorded_at: datetime
+    recorded_at: Union[datetime, str]
 
 
 class PredictionRequest(BaseModel):
@@ -66,7 +67,7 @@ class AlertLogItem(BaseModel):
     recipients: List[str]
     email_status: str
     error_message: Optional[str] = None
-    sent_at: datetime
+    sent_at: Union[datetime, str]
 
 
 class SystemOverview(BaseModel):

@@ -369,12 +369,19 @@ function renderMachineCards(machines) {
 
   container.innerHTML = machines.map(m => {
     const risk = Number(m.risk_percent || 0);
-    const isCritical = m.status === 'HIGH FAILURE RISK' || risk >= 60;
+    const isStopped = m.operational_state === 'TRIPPED_STOPPED' || m.status === 'EMERGENCY STOPPED' || (risk >= 60 && m.rpm === 0);
+    const isCritical = isStopped || m.status === 'HIGH FAILURE RISK' || risk >= 60;
     const isWarning = m.status === 'WARNING';
     
-    // Theme Colors
-    const statusBg = isCritical ? 'bg-rose-500/15 border-rose-500/30 text-rose-400' : (isWarning ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400');
-    const glowClass = isCritical ? 'glow-rose border-rose-500/40' : (isWarning ? 'glow-amber border-amber-500/30' : 'border-slate-800');
+    // Theme Colors & Badges
+    let statusText = isStopped ? 'EMERGENCY SHUTDOWN' : (m.status || 'NORMAL');
+    let statusBg = isStopped 
+      ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
+      : (isCritical 
+        ? 'bg-rose-500/15 border-rose-500/30 text-rose-400' 
+        : (isWarning ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'));
+
+    const glowClass = isStopped ? 'glow-rose border-rose-500/60 bg-rose-950/10' : (isCritical ? 'glow-rose border-rose-500/40' : (isWarning ? 'glow-amber border-amber-500/30' : 'border-slate-800'));
     const riskMeterColor = isCritical ? '#f43f5e' : (isWarning ? '#f59e0b' : '#10b981');
     const timeFormatted = formatLocalTime(m.recorded_at);
 
@@ -384,95 +391,106 @@ function renderMachineCards(machines) {
     const rpm = Math.round(Number(m.rpm || 0));
 
     return `
-      <div class="glass-panel glass-panel-hover p-6 rounded-2xl ${glowClass} relative overflow-hidden transition-all">
+      <div class="glass-panel glass-panel-hover p-6 rounded-2xl ${glowClass} relative overflow-hidden transition-all flex flex-col justify-between">
         
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-2.5">
-            <div class="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-sm text-teal-400 font-mono">
-              ${m.machine_id}
-            </div>
-            <div>
-              <h3 class="text-sm font-bold text-white tracking-wide">Machine ${m.machine_id}</h3>
-              <div class="text-[11px] text-slate-400 flex items-center gap-1">
-                <i data-lucide="clock" class="w-3 h-3 text-slate-500"></i>
-                <span>${timeFormatted}</span>
+        <div>
+          <!-- Header -->
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2.5">
+              <div class="w-9 h-9 rounded-lg ${isStopped ? 'bg-rose-900/60 border-rose-500/60 text-rose-300' : 'bg-slate-800 border-slate-700 text-teal-400'} border flex items-center justify-center font-bold text-sm font-mono">
+                ${m.machine_id}
+              </div>
+              <div>
+                <h3 class="text-sm font-bold text-white tracking-wide">Machine ${m.machine_id}</h3>
+                <div class="text-[11px] text-slate-400 flex items-center gap-1">
+                  <i data-lucide="clock" class="w-3 h-3 text-slate-500"></i>
+                  <span>${timeFormatted}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- Status Badge -->
-          <div class="px-2.5 py-1 rounded-full text-[11px] font-bold border uppercase tracking-wider flex items-center gap-1.5 ${statusBg}">
-            <span class="w-1.5 h-1.5 rounded-full ${isCritical ? 'bg-rose-400 animate-ping' : (isWarning ? 'bg-amber-400' : 'bg-emerald-400')}"></span>
-            <span>${m.status || 'NORMAL'}</span>
-          </div>
-        </div>
-
-        <!-- Failure Risk Meter -->
-        <div class="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 mb-4">
-          <div class="flex items-center justify-between mb-1.5">
-            <span class="text-xs font-semibold text-slate-300">AI Failure Risk</span>
-            <span class="text-sm font-bold telemetry-val" style="color: ${riskMeterColor};">${risk.toFixed(1)}%</span>
-          </div>
-          <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-            <div class="h-full rounded-full transition-all duration-700" style="width: ${Math.min(risk, 100)}%; background-color: ${riskMeterColor};"></div>
-          </div>
-        </div>
-
-        <!-- 4 Telemetry Metrics Grid -->
-        <div class="grid grid-cols-2 gap-2.5 text-xs">
-          
-          <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
-            <div class="text-slate-400 text-[11px] flex items-center gap-1">
-              <i data-lucide="thermometer" class="w-3.5 h-3.5 text-rose-400"></i>
-              <span>Temperature</span>
+            <!-- Status Badge -->
+            <div class="px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider flex items-center gap-1.5 ${statusBg}">
+              <span class="w-1.5 h-1.5 rounded-full ${isStopped ? 'bg-rose-400 animate-ping' : (isWarning ? 'bg-amber-400' : 'bg-emerald-400')}"></span>
+              <span>${statusText}</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${temp} <span class="text-[10px] text-slate-400">°C</span></div>
           </div>
 
-          <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
-            <div class="text-slate-400 text-[11px] flex items-center gap-1">
-              <i data-lucide="activity" class="w-3.5 h-3.5 text-amber-400"></i>
-              <span>Vibration</span>
+          <!-- Failure Risk Meter -->
+          <div class="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 mb-4">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs font-semibold text-slate-300">AI Failure Risk</span>
+              <span class="text-sm font-bold telemetry-val" style="color: ${riskMeterColor};">${risk.toFixed(1)}%</span>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${vib} <span class="text-[10px] text-slate-400">mm/s</span></div>
-          </div>
-
-          <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
-            <div class="text-slate-400 text-[11px] flex items-center gap-1">
-              <i data-lucide="zap" class="w-3.5 h-3.5 text-cyan-400"></i>
-              <span>Current</span>
+            <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div class="h-full rounded-full transition-all duration-700" style="width: ${Math.min(risk, 100)}%; background-color: ${riskMeterColor};"></div>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${cur} <span class="text-[10px] text-slate-400">A</span></div>
           </div>
 
-          <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
-            <div class="text-slate-400 text-[11px] flex items-center gap-1">
-              <i data-lucide="gauge" class="w-3.5 h-3.5 text-emerald-400"></i>
-              <span>Speed (RPM)</span>
+          <!-- 4 Telemetry Metrics Grid -->
+          <div class="grid grid-cols-2 gap-2.5 text-xs mb-3">
+            
+            <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
+              <div class="text-slate-400 text-[11px] flex items-center gap-1">
+                <i data-lucide="thermometer" class="w-3.5 h-3.5 text-rose-400"></i>
+                <span>Temperature</span>
+              </div>
+              <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${temp} <span class="text-[10px] text-slate-400">°C</span></div>
             </div>
-            <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${rpm} <span class="text-[10px] text-slate-400">rpm</span></div>
+
+            <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
+              <div class="text-slate-400 text-[11px] flex items-center gap-1">
+                <i data-lucide="activity" class="w-3.5 h-3.5 text-amber-400"></i>
+                <span>Vibration</span>
+              </div>
+              <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${vib} <span class="text-[10px] text-slate-400">mm/s</span></div>
+            </div>
+
+            <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
+              <div class="text-slate-400 text-[11px] flex items-center gap-1">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-cyan-400"></i>
+                <span>Current</span>
+              </div>
+              <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${cur} <span class="text-[10px] text-slate-400">A</span></div>
+            </div>
+
+            <div class="bg-slate-900/60 border border-slate-800/60 p-2.5 rounded-lg">
+              <div class="text-slate-400 text-[11px] flex items-center gap-1">
+                <i data-lucide="gauge" class="w-3.5 h-3.5 text-emerald-400"></i>
+                <span>Speed (RPM)</span>
+              </div>
+              <div class="text-sm font-bold text-slate-100 telemetry-val mt-0.5">${rpm} <span class="text-[10px] text-slate-400">rpm</span></div>
+            </div>
+
           </div>
 
+          ${isStopped ? `
+            <div class="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-300 flex items-start gap-2 mb-3">
+              <i data-lucide="shield-alert" class="w-4 h-4 text-rose-400 shrink-0 mt-0.5"></i>
+              <span><strong>Safety Lockout:</strong> High failure risk detected. Machine automatically tripped and halted to prevent mechanical breakdown.</span>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Action Bar on Card -->
-        <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between">
-          <button onclick="setChartMachine('${m.machine_id}')" class="text-[11px] text-teal-400 hover:text-teal-300 font-medium flex items-center gap-1 transition">
-            <span>View Graph</span>
-            <i data-lucide="chevron-right" class="w-3 h-3"></i>
-          </button>
-          
-          <div class="flex items-center gap-1.5">
-            <button onclick="restoreNormal('${m.machine_id}')" class="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition" title="Restore healthy normal readings on ${m.machine_id}">
-              <i data-lucide="check" class="w-3 h-3"></i>
-              <span>Fix / Heal</span>
+        <div class="mt-2 pt-3 border-t border-slate-800/60">
+          ${isStopped ? `
+            <button onclick="restoreNormal('${m.machine_id}')" class="w-full py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer">
+              <i data-lucide="wrench" class="w-3.5 h-3.5"></i>
+              <span>Fix / Heal & Restart Machine</span>
             </button>
-            <button onclick="triggerHazard('${m.machine_id}')" class="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition" title="Inject abnormal spike on ${m.machine_id}">
-              <i data-lucide="zap-off" class="w-3 h-3"></i>
-              <span>Hazard</span>
-            </button>
-          </div>
+          ` : `
+            <div class="flex items-center justify-between">
+              <button onclick="setChartMachine('${m.machine_id}')" class="text-[11px] text-teal-400 hover:text-teal-300 font-medium flex items-center gap-1 transition cursor-pointer">
+                <span>View Graph</span>
+                <i data-lucide="chevron-right" class="w-3 h-3"></i>
+              </button>
+              <button onclick="restoreNormal('${m.machine_id}')" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold rounded-md flex items-center gap-1 transition cursor-pointer" title="Service / inspect machine">
+                <i data-lucide="check" class="w-3 h-3"></i>
+                <span>Heal / Service</span>
+              </button>
+            </div>
+          `}
         </div>
 
       </div>

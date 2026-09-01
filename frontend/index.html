@@ -159,12 +159,12 @@
           <p class="text-xs text-slate-400">Live AI risk scores calculated per telemetry packet</p>
         </div>
 
-        <!-- Quick simulator triggers -->
+        <!-- Status & Actions -->
         <div class="flex items-center gap-2">
-          <button onclick="triggerSimTick()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs rounded-lg flex items-center gap-1.5 transition">
-            <i data-lucide="play" class="w-3 h-3 text-teal-400"></i>
-            <span>Simulate Step</span>
-          </button>
+          <div class="px-2.5 py-1 bg-teal-500/10 border border-teal-500/20 text-teal-300 text-xs rounded-lg flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse"></span>
+            <span class="font-medium text-[11px]">Auto IoT Stream Active</span>
+          </div>
           <button onclick="openTestAlertModal()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs rounded-lg flex items-center gap-1.5 transition">
             <i data-lucide="send" class="w-3 h-3 text-amber-400"></i>
             <span>Test Email</span>

@@ -1,10 +1,12 @@
 """
 FastAPI Main Application for AI Predictive Maintenance System.
-Provides RESTful APIs for real-time telemetry, ML predictions, email alerts, and historical data.
+Features autonomous background telemetry streaming, real-time ML risk prediction,
+automatic emergency safety lockout (trip) on hazard detection, and SMTP/HTTPS alerting.
 """
+import asyncio
 import random
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,10 +43,128 @@ from app.schemas import (
     SimulationTickRequest,
 )
 
+# ---------------------------------------------------------------------------
+# In-Memory Machine State & Physical Telemetry Controllers
+# ---------------------------------------------------------------------------
+MACHINE_CONTROLLERS: Dict[str, Dict[str, Any]] = {
+    m: {
+        "operational_state": "RUNNING",  # "RUNNING" or "TRIPPED_STOPPED"
+        "temp": round(random.uniform(58.0, 66.0), 2),
+        "vib": round(random.uniform(1.2, 1.8), 2),
+        "curr": round(random.uniform(4.5, 5.5), 2),
+        "rpm": random.randint(1550, 1720),
+        "cycles": 0,
+        "cycles_to_fault": random.randint(25, 50),  # Autonomous fault trigger
+    }
+    for m in MACHINES
+}
 
+
+def _step_machine_telemetry(mid: str) -> Dict[str, Any]:
+    """
+    Executes one physical simulation step for a machine.
+    If tripped, keeps machine halted with cooling temperature and 0 RPM.
+    If running, generates smooth telemetry with occasional degradation leading to trip.
+    """
+    ctrl = MACHINE_CONTROLLERS.setdefault(mid, {
+        "operational_state": "RUNNING",
+        "temp": 62.0,
+        "vib": 1.4,
+        "curr": 4.8,
+        "rpm": 1650,
+        "cycles": 0,
+        "cycles_to_fault": random.randint(25, 50),
+    })
+
+    # Case 1: Machine is in Safety Shutdown / Lockout
+    if ctrl["operational_state"] == "TRIPPED_STOPPED":
+        # Machine is stopped: cooldown towards ambient 32°C, 0 RPM, 0 Current
+        ctrl["temp"] = round(max(32.0, ctrl["temp"] - 1.2), 2)
+        ctrl["vib"] = round(random.uniform(0.04, 0.10), 2)
+        ctrl["curr"] = 0.0
+        ctrl["rpm"] = 0
+
+        reading = create_sensor_reading(
+            SensorReadingCreate(
+                machine_id=mid,
+                temperature=ctrl["temp"],
+                vibration=ctrl["vib"],
+                current=ctrl["curr"],
+                rpm=ctrl["rpm"],
+            )
+        )
+        return reading
+
+    # Case 2: Machine is Active & Running
+    ctrl["cycles"] += 1
+
+    # Check if continuous wear reaches critical hazard threshold
+    if ctrl["cycles"] >= ctrl["cycles_to_fault"]:
+        # Anomaly build-up spike
+        ctrl["temp"] = round(random.uniform(93.0, 98.5), 2)
+        ctrl["vib"] = round(random.uniform(5.8, 7.4), 2)
+        ctrl["curr"] = round(random.uniform(10.2, 12.4), 2)
+        ctrl["rpm"] = random.randint(900, 1150)
+
+        # Safety Action: Trip the machine automatically!
+        ctrl["operational_state"] = "TRIPPED_STOPPED"
+        print(f"🚨 [SAFETY TRIP] High failure risk detected on {mid}! Machine automatically shut down.")
+
+        reading = create_sensor_reading(
+            SensorReadingCreate(
+                machine_id=mid,
+                temperature=ctrl["temp"],
+                vibration=ctrl["vib"],
+                current=ctrl["curr"],
+                rpm=ctrl["rpm"],
+            )
+        )
+        return reading
+
+    # Normal smooth physical progression
+    ctrl["temp"] = round(max(52.0, min(75.0, ctrl["temp"] + random.uniform(-0.6, 0.6))), 2)
+    ctrl["vib"] = round(max(0.8, min(2.5, ctrl["vib"] + random.uniform(-0.12, 0.12))), 2)
+    ctrl["curr"] = round(max(3.8, min(6.4, ctrl["curr"] + random.uniform(-0.15, 0.15))), 2)
+    ctrl["rpm"] = int(max(1450, min(1750, ctrl["rpm"] + random.randint(-15, 15))))
+
+    reading = create_sensor_reading(
+        SensorReadingCreate(
+            machine_id=mid,
+            temperature=ctrl["temp"],
+            vibration=ctrl["vib"],
+            current=ctrl["curr"],
+            rpm=ctrl["rpm"],
+        )
+    )
+    return reading
+
+
+def generate_autonomous_cycle():
+    """Generates 1 continuous telemetry reading for each monitored machine."""
+    for mid in MACHINES:
+        try:
+            _step_machine_telemetry(mid)
+        except Exception as e:
+            print(f"Telemetry step error for {mid}: {e}")
+
+
+async def telemetry_background_worker():
+    """Autonomous background loop generating continuous IoT readings every 5 seconds."""
+    await asyncio.sleep(2)  # Initial wait on startup
+    while True:
+        try:
+            generate_autonomous_cycle()
+        except Exception as e:
+            print(f"Autonomous background telemetry error: {e}")
+        await asyncio.sleep(5)
+
+
+# ---------------------------------------------------------------------------
+# FastAPI Application Setup & Lifespan
+# ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan event: initialize database schema and pre-load ML model."""
+    """Lifespan event: initialize database schema, pre-load ML model, and start telemetry generator."""
     try:
         ensure_schema()
         print("Database schema verified.")
@@ -57,12 +177,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Failed to load ML model at startup: {e}")
 
+    # Launch background autonomous telemetry generator
+    task = asyncio.create_task(telemetry_background_worker())
     yield
+    task.cancel()
 
 
 app = FastAPI(
     title="AI Predictive Maintenance API",
-    description="REST API for multi-machine telemetry monitoring, AI failure risk prediction, and automated email alerting.",
+    description="REST API for multi-machine telemetry monitoring, AI failure risk prediction, autonomous telemetry, and automated email alerting.",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -85,13 +208,14 @@ app.add_middleware(
 @app.get("/api/health", tags=["Health"])
 @app.get("/api/status", tags=["Health"])
 def health_check():
-    """Health check endpoint for Render service monitoring."""
+    """Health check endpoint for service monitoring."""
     return {
         "status": "healthy",
         "service": "AI Predictive Maintenance API",
         "version": "2.0.0",
         "machines": MACHINES,
         "email_alerts_enabled": EMAIL_ALERTS_ENABLED,
+        "autonomous_generator": "active (5s interval)",
     }
 
 
@@ -120,6 +244,12 @@ def get_latest_readings():
     results = []
     for r in rows:
         pred = predict_risk(r["temperature"], r["vibration"], r["current"], r["rpm"])
+        ctrl = MACHINE_CONTROLLERS.get(r["machine_id"], {})
+        op_state = ctrl.get("operational_state", "RUNNING")
+        
+        # If machine is stopped, display status clearly
+        display_status = "EMERGENCY STOPPED" if (op_state == "TRIPPED_STOPPED" and r["rpm"] == 0) else pred["status"]
+
         results.append(
             MachineLatestStatus(
                 machine_id=r["machine_id"],
@@ -128,39 +258,46 @@ def get_latest_readings():
                 current=r["current"],
                 rpm=r["rpm"],
                 recorded_at=r["recorded_at"],
-                status=pred["status"],
+                status=display_status,
                 risk_percent=pred["risk_percent"],
-                alert_info=None,
+                operational_state=op_state,
             )
         )
     return results
 
 
 @app.get("/api/readings/history", response_model=List[HistoryPoint], tags=["Telemetry"])
-def get_machine_history(
-    machine_id: str = Query(..., description="Machine ID (e.g. M01)"),
-    limit: int = Query(50, ge=5, le=500, description="Max number of data points"),
+def get_history(
+    machine_id: str = Query("M01", description="Machine identifier (e.g. M01, M02, M03)"),
+    limit: int = Query(50, ge=1, le=200, description="Max number of points to retrieve"),
 ):
-    """
-    Get chronological sensor history for charts and time-series visualization.
-    """
+    """Retrieve historical telemetry for a machine in chronological order."""
     try:
-        data = db_history(machine_id, limit)
-        return [HistoryPoint(**d) for d in data]
+        rows = db_history(machine_id, limit)
+        return [
+            HistoryPoint(
+                temperature=r["temperature"],
+                vibration=r["vibration"],
+                current=r["current"],
+                rpm=r["rpm"],
+                recorded_at=r["recorded_at"],
+            )
+            for r in rows
+        ]
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database history query error: {str(e)}",
+            detail=f"Error fetching historical telemetry: {str(e)}",
         )
 
 
 @app.post("/api/readings", response_model=MachineLatestStatus, tags=["Telemetry"])
 def create_sensor_reading(payload: SensorReadingCreate):
     """
-    Ingest a new sensor reading.
-    Runs ML risk prediction and automatically triggers an email alert if high risk.
+    Ingest a new telemetry packet from a machine sensor.
+    Runs ML prediction, logs reading, and triggers email alert if risk exceeds threshold.
     """
-    # 1. Evaluate ML prediction
+    # 1. Run ML prediction
     pred = predict_risk(
         payload.temperature,
         payload.vibration,
@@ -168,14 +305,14 @@ def create_sensor_reading(payload: SensorReadingCreate):
         payload.rpm,
     )
 
-    # 2. Insert to database
+    # 2. Persist to PostgreSQL database
     try:
         inserted = insert_reading(
-            payload.machine_id,
-            payload.temperature,
-            payload.vibration,
-            payload.current,
-            payload.rpm,
+            machine_id=payload.machine_id,
+            temperature=payload.temperature,
+            vibration=payload.vibration,
+            current=payload.current,
+            rpm=payload.rpm,
         )
     except Exception as e:
         raise HTTPException(
@@ -199,6 +336,10 @@ def create_sensor_reading(payload: SensorReadingCreate):
             sensor_data,
         )
 
+    ctrl = MACHINE_CONTROLLERS.get(payload.machine_id, {})
+    op_state = ctrl.get("operational_state", "RUNNING")
+    display_status = "EMERGENCY STOPPED" if (op_state == "TRIPPED_STOPPED" and payload.rpm == 0) else pred["status"]
+
     return MachineLatestStatus(
         machine_id=payload.machine_id,
         temperature=payload.temperature,
@@ -206,8 +347,9 @@ def create_sensor_reading(payload: SensorReadingCreate):
         current=payload.current,
         rpm=payload.rpm,
         recorded_at=inserted["recorded_at"],
-        status=pred["status"],
+        status=display_status,
         risk_percent=pred["risk_percent"],
+        operational_state=op_state,
         alert_info=alert_result,
     )
 
@@ -259,18 +401,17 @@ def predict(payload: PredictionRequest):
 def get_recent_alerts(limit: int = Query(20, ge=1, le=100)):
     """Fetch the latest alert history records."""
     try:
-        logs = db_recent_alerts(limit)
-        return [AlertLogItem(**l) for l in logs]
+        return db_recent_alerts(limit)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching alerts: {str(e)}",
+            detail=f"Error fetching alert logs: {str(e)}",
         )
 
 
 @app.post("/api/alerts/test", tags=["Alerts"])
 def trigger_test_alert(payload: Optional[TestEmailRequest] = None):
-    """Trigger a test email notification to verify SMTP settings."""
+    """Trigger a test email notification to verify settings."""
     recipient = payload.recipient if payload else None
     result = send_test_email(recipient)
     if not result.get("sent"):
@@ -279,79 +420,43 @@ def trigger_test_alert(payload: Optional[TestEmailRequest] = None):
 
 
 # ---------------------------------------------------------------------------
-# Simulation Triggers (For live web demos & testing)
+# Autonomous Telemetry Actions & Maintenance Controls
 # ---------------------------------------------------------------------------
 @app.post("/api/simulator/tick", tags=["Simulator"])
 def simulate_cycle(payload: Optional[SimulationTickRequest] = None):
-    """
-    Generate one cycle of simulated sensor readings across all machines.
-    Useful for testing the dashboard live without a background daemon.
-    """
-    abnormal_chance = payload.abnormal_chance if payload else 0.15
-    results = []
-
-    for mid in MACHINES:
-        temperature = random.uniform(50, 70)
-        vibration = random.uniform(1, 2.8)
-        current = random.uniform(4, 7)
-        rpm = random.randint(1400, 1750)
-
-        # Inject anomaly if roll matches abnormal chance
-        if random.random() < abnormal_chance:
-            temperature = random.uniform(82, 98)
-            vibration = random.uniform(4.5, 6.8)
-            current = random.uniform(8.5, 11.8)
-            rpm = random.randint(950, 1280)
-
-        reading = create_sensor_reading(
-            SensorReadingCreate(
-                machine_id=mid,
-                temperature=round(temperature, 2),
-                vibration=round(vibration, 2),
-                current=round(current, 2),
-                rpm=rpm,
-            )
-        )
-        results.append(reading)
-
-    return {"message": "Simulation tick generated", "readings": results}
-
-
-@app.post("/api/simulator/hazard", tags=["Simulator"])
-def trigger_hazard(machine_id: str = Query(..., description="Target machine ID (e.g. M01)")):
-    """
-    Force a high-risk anomaly event on a specific machine to test alerts immediately.
-    """
-    if machine_id not in MACHINES:
-        raise HTTPException(status_code=400, detail=f"Machine {machine_id} is not in monitored list.")
-
-    reading = create_sensor_reading(
-        SensorReadingCreate(
-            machine_id=machine_id,
-            temperature=round(random.uniform(88, 98), 2),
-            vibration=round(random.uniform(5.2, 7.1), 2),
-            current=round(random.uniform(9.5, 12.0), 2),
-            rpm=random.randint(900, 1200),
-        )
-    )
-    return {"message": f"Hazard injected on {machine_id}", "reading": reading}
+    """Manual fast-forward simulation cycle across all machines."""
+    generate_autonomous_cycle()
+    latest_items = get_latest_readings()
+    return {"message": "Continuous telemetry cycle generated", "readings": latest_items}
 
 
 @app.post("/api/simulator/normalize", tags=["Simulator"])
 def normalize_machine(machine_id: str = Query(..., description="Target machine ID (e.g. M03)")):
     """
-    Inject a healthy, normal reading on a machine to restore it from failure state.
+    Operator Action: Repair / Heal and restart a stopped machine back into active running state.
     """
     if machine_id not in MACHINES:
         raise HTTPException(status_code=400, detail=f"Machine {machine_id} is not in monitored list.")
 
+    ctrl = MACHINE_CONTROLLERS.setdefault(machine_id, {})
+    ctrl["operational_state"] = "RUNNING"
+    ctrl["cycles"] = 0
+    ctrl["cycles_to_fault"] = random.randint(30, 60)
+    ctrl["temp"] = round(random.uniform(58.0, 64.0), 2)
+    ctrl["vib"] = round(random.uniform(1.1, 1.6), 2)
+    ctrl["curr"] = round(random.uniform(4.2, 5.2), 2)
+    ctrl["rpm"] = random.randint(1600, 1720)
+
     reading = create_sensor_reading(
         SensorReadingCreate(
             machine_id=machine_id,
-            temperature=round(random.uniform(58, 68), 2),
-            vibration=round(random.uniform(1.2, 2.2), 2),
-            current=round(random.uniform(4.5, 6.2), 2),
-            rpm=random.randint(1550, 1720),
+            temperature=ctrl["temp"],
+            vibration=ctrl["vib"],
+            current=ctrl["curr"],
+            rpm=ctrl["rpm"],
         )
     )
-    return {"message": f"Machine {machine_id} telemetry restored to normal healthy range.", "reading": reading}
+    return {
+        "message": f"Machine {machine_id} inspected, repaired, and restarted into autonomous operation.",
+        "reading": reading,
+    }
