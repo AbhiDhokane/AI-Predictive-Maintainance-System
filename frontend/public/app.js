@@ -105,10 +105,28 @@ document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   initChart();
   
+  // Render cached telemetry immediately for zero-flicker UI
+  renderCachedDataIfAvailable();
+
   // Initial Data Fetch
   checkApiAndFetch();
   startRefreshTimer();
 });
+
+function renderCachedDataIfAvailable() {
+  try {
+    const raw = localStorage.getItem('pm_cached_overview');
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data) {
+        renderOverviewStats(data);
+        if (data.machines && data.machines.length > 0) {
+          renderMachineCards(data.machines);
+        }
+      }
+    }
+  } catch (_) {}
+}
 
 function initLucide() {
   if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -252,12 +270,12 @@ async function fetchDashboardData(silent = false) {
   const start = performance.now();
 
   try {
-    // Fetch all core telemetry endpoints concurrently for optimal performance
+    // Fetch all core telemetry endpoints concurrently for optimal performance (30s timeout for cold start)
     const [overviewResult, latestResult, historyResult, alertsResult] = await Promise.allSettled([
-      fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Overview HTTP ${r.status}`))),
-      fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Latest HTTP ${r.status}`))),
-      fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`History HTTP ${r.status}`))),
-      fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Alerts HTTP ${r.status}`)))
+      fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(30000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Overview HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(30000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Latest HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(30000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`History HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(30000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Alerts HTTP ${r.status}`)))
     ]);
 
     let hasAnySuccess = false;
@@ -266,6 +284,9 @@ async function fetchDashboardData(silent = false) {
     if (overviewResult.status === 'fulfilled' && overviewResult.value) {
       hasAnySuccess = true;
       state.lastOverview = overviewResult.value;
+      try {
+        localStorage.setItem('pm_cached_overview', JSON.stringify(overviewResult.value));
+      } catch (_) {}
       renderOverviewStats(overviewResult.value);
       if (overviewResult.value.machines && overviewResult.value.machines.length > 0) {
         renderMachineCards(overviewResult.value.machines);
