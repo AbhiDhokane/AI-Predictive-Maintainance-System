@@ -11,6 +11,9 @@ const state = {
   timerId: null,
   chart: null,
   lastData: null,
+  lastOverview: null,
+  consecutiveFailures: 0,
+  isFetching: false,
 };
 
 // Metric Configurations (units, color schemes, chart ranges)
@@ -188,10 +191,32 @@ function stopRefreshTimer() {
 // Data Fetching & API Communication
 // ---------------------------------------------------------------------------
 
-async function checkApiAndFetch() {
+async function checkApiAndFetch(retryCount = 0) {
+  const dot = document.getElementById('api-status-dot');
+  const text = document.getElementById('api-status-text');
+  const latency = document.getElementById('api-latency');
+
+  if (retryCount === 0 && text && text.textContent !== 'API Connected') {
+    if (dot) dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
+    text.textContent = 'Connecting...';
+    text.className = 'text-amber-300 font-medium';
+    if (latency) latency.textContent = 'Checking';
+  }
+
   const conn = await Config.testConnection();
-  updateApiStatusBadge(conn);
-  await fetchDashboardData();
+  if (conn.ok) {
+    updateApiStatusBadge(conn);
+    await fetchDashboardData(true);
+  } else {
+    // If first check failed, it might be cold start on Render. Try to auto-retry gracefully up to 3 times
+    if (retryCount < 3) {
+      updateApiStatusBadge({ ok: false, wakingUp: true, retry: retryCount + 1 });
+      setTimeout(() => checkApiAndFetch(retryCount + 1), 2500);
+    } else {
+      updateApiStatusBadge(conn);
+      await fetchDashboardData(true);
+    }
+  }
 }
 
 function updateApiStatusBadge(conn) {
@@ -206,6 +231,11 @@ function updateApiStatusBadge(conn) {
     text.textContent = 'API Connected';
     text.className = 'text-emerald-400 font-medium';
     latency.textContent = conn.latency ? `${conn.latency}ms` : 'Online';
+  } else if (conn.wakingUp) {
+    dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-ping';
+    text.textContent = conn.retry ? `Waking Server (${conn.retry})...` : 'Waking Server...';
+    text.className = 'text-amber-400 font-medium';
+    latency.textContent = 'Retrying';
   } else {
     dot.className = 'w-2 h-2 rounded-full bg-rose-500 animate-pulse';
     text.textContent = 'API Disconnected';
@@ -215,81 +245,86 @@ function updateApiStatusBadge(conn) {
 }
 
 async function fetchDashboardData(silent = false) {
+  if (state.isFetching) return;
+  state.isFetching = true;
+
   const baseUrl = Config.getApiUrl();
-  let hasAnySuccess = false;
   const start = performance.now();
 
   try {
-    // 1. Fetch Overview (contains high level KPIs + machine statuses)
-    try {
-      const overviewRes = await fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(20000) });
-      if (overviewRes.ok) {
-        const overview = await overviewRes.json();
-        hasAnySuccess = true;
-        renderOverviewStats(overview);
-        if (overview.machines && overview.machines.length > 0) {
-          renderMachineCards(overview.machines);
-        }
+    // Fetch all core telemetry endpoints concurrently for optimal performance
+    const [overviewResult, latestResult, historyResult, alertsResult] = await Promise.allSettled([
+      fetch(`${baseUrl}/api/overview`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Overview HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Latest HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`History HTTP ${r.status}`))),
+      fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Alerts HTTP ${r.status}`)))
+    ]);
+
+    let hasAnySuccess = false;
+
+    // 1. Overview
+    if (overviewResult.status === 'fulfilled' && overviewResult.value) {
+      hasAnySuccess = true;
+      state.lastOverview = overviewResult.value;
+      renderOverviewStats(overviewResult.value);
+      if (overviewResult.value.machines && overviewResult.value.machines.length > 0) {
+        renderMachineCards(overviewResult.value.machines);
       }
-    } catch (e) {
-      console.warn('Overview fetch warning:', e);
     }
 
-    // 2. Fetch Latest Readings
-    try {
-      const latestRes = await fetch(`${baseUrl}/api/readings/latest`, { signal: AbortSignal.timeout(20000) });
-      if (latestRes.ok) {
-        const machines = await latestRes.json();
-        hasAnySuccess = true;
-        if (machines && machines.length > 0) {
-          renderMachineCards(machines);
-        }
+    // 2. Latest Readings
+    if (latestResult.status === 'fulfilled' && latestResult.value && Array.isArray(latestResult.value)) {
+      hasAnySuccess = true;
+      if (latestResult.value.length > 0) {
+        renderMachineCards(latestResult.value);
       }
-    } catch (e) {
-      console.warn('Latest readings fetch warning:', e);
     }
 
-    // 3. Fetch Historical Data for Active Machine
-    try {
-      const historyRes = await fetch(`${baseUrl}/api/readings/history?machine_id=${state.activeMachine}&limit=30`, { signal: AbortSignal.timeout(20000) });
-      if (historyRes.ok) {
-        const history = await historyRes.json();
-        hasAnySuccess = true;
-        renderChartData(history);
-      }
-    } catch (e) {
-      console.warn('History fetch warning:', e);
+    // 3. History Chart
+    if (historyResult.status === 'fulfilled' && historyResult.value && Array.isArray(historyResult.value)) {
+      hasAnySuccess = true;
+      renderChartData(historyResult.value);
     }
 
-    // 4. Fetch Recent Alert Audit Log
-    try {
-      const alertsRes = await fetch(`${baseUrl}/api/alerts/recent?limit=10`, { signal: AbortSignal.timeout(20000) });
-      if (alertsRes.ok) {
-        const alerts = await alertsRes.json();
-        hasAnySuccess = true;
-        renderAlertsTable(alerts);
-      }
-    } catch (e) {
-      console.warn('Alerts fetch warning:', e);
+    // 4. Alerts Table
+    if (alertsResult.status === 'fulfilled' && alertsResult.value && Array.isArray(alertsResult.value)) {
+      hasAnySuccess = true;
+      renderAlertsTable(alertsResult.value);
     }
 
     const duration = Math.round(performance.now() - start);
 
     if (hasAnySuccess) {
+      state.consecutiveFailures = 0;
       updateApiStatusBadge({ ok: true, latency: duration });
+    } else {
+      state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
+      // If temporary hiccup or cold start, retry automatically before showing hard offline
+      if (state.consecutiveFailures <= 2) {
+        updateApiStatusBadge({ ok: false, wakingUp: true, retry: state.consecutiveFailures });
+        setTimeout(() => fetchDashboardData(true), 2500);
+      } else {
+        updateApiStatusBadge({ ok: false });
+        if (!silent) {
+          showToast('Connection Notice', `Unable to reach backend at ${baseUrl}. Free-tier servers may take up to 45s to wake up.`, 'warning');
+        }
+      }
+    }
+
+    initLucide();
+  } catch (err) {
+    state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
+    if (state.consecutiveFailures <= 2) {
+      updateApiStatusBadge({ ok: false, wakingUp: true, retry: state.consecutiveFailures });
+      setTimeout(() => fetchDashboardData(true), 2500);
     } else {
       updateApiStatusBadge({ ok: false });
       if (!silent) {
         showToast('Connection Error', `Failed to connect to backend at ${baseUrl}`, 'error');
       }
     }
-
-    initLucide();
-  } catch (err) {
-    if (!silent) {
-      showToast('Connection Error', `Failed to connect to backend at ${baseUrl}`, 'error');
-    }
-    updateApiStatusBadge({ ok: false });
+  } finally {
+    state.isFetching = false;
   }
 }
 
@@ -773,11 +808,26 @@ async function testConfigUrl() {
 function saveConfigUrl() {
   const input = document.getElementById('input-api-url');
   if (input) {
-    Config.setApiUrl(input.value.trim());
+    const newUrl = input.value.trim();
+    Config.setApiUrl(newUrl);
     showToast('Settings Saved', `API URL set to: ${Config.getApiUrl()}`, 'info');
     closeConfigModal();
     checkApiAndFetch();
   }
+}
+
+function resetConfigUrl() {
+  const defaultUrl = Config.resetToDefault();
+  const input = document.getElementById('input-api-url');
+  if (input) input.value = defaultUrl;
+  const resDiv = document.getElementById('config-test-result');
+  if (resDiv) {
+    resDiv.classList.remove('hidden');
+    resDiv.className = 'p-3 rounded-lg text-xs bg-cyan-500/20 border border-cyan-500/30 text-cyan-300';
+    resDiv.textContent = `Reset to default URL: ${defaultUrl}`;
+  }
+  showToast('Reset Complete', `Restored default API URL: ${defaultUrl}`, 'info');
+  checkApiAndFetch();
 }
 
 function openTestAlertModal() {
@@ -919,6 +969,7 @@ window.openConfigModal = openConfigModal;
 window.closeConfigModal = closeConfigModal;
 window.testConfigUrl = testConfigUrl;
 window.saveConfigUrl = saveConfigUrl;
+window.resetConfigUrl = resetConfigUrl;
 window.openTestAlertModal = openTestAlertModal;
 window.closeTestAlertModal = closeTestAlertModal;
 window.submitTestEmail = submitTestEmail;
